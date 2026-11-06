@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>划词翻译 — 功能演示</title>
+    <style>
+      /* ============================================================
+         演示动画：约 110 秒，9 个章节
+         配色沿用 App 图标（深蓝底 + 亮蓝发光）
+         舞台固定 1200×760，整体等比缩放适配任意屏幕
+         ============================================================ */
+      :root {
+        --navy: #0d1526;
+        --glow: #4a9eff;
+        --ink: #e8eefc;
+        --muted: #8b97ad;
+        --dim: #5d6a82;
+        --ok: #3ecf8e;
+        --line: rgba(255, 255, 255, 0.08);
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #060a12;
+        overflow: hidden;
+        font-family: system-ui, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+      }
+
+      #stage {
+        position: relative;
+        width: 1200px;
+        height: 760px;
+        margin: 0 auto;
+        transform-origin: top center;
+        overflow: hidden;
+        background:
+          radial-gradient(1200px 600px at 50% -10%, #1b2c4d 0%, transparent 60%),
+          linear-gradient(180deg, #0a1120 0%, #070b14 100%);
+      }
+
+      /* ---------- 窗口外壳 ---------- */
+      .win {
+        position: absolute;
+        border-radius: 12px;
+        background: var(--navy);
+        border: 1px solid rgba(122, 184, 255, 0.18);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.4),
+          0 24px 60px rgba(0, 0, 0, 0.55),
+          0 0 40px rgba(74, 158, 255, 0.08);
+        opacity: 0;
+        transition: opacity 0.45s ease, transform 0.45s ease;
+        transform: translateY(10px);
+        overflow: hidden;
+      }
+      .win.show { opacity: 1; transform: translateY(0); }
+
+      .titlebar {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .tb-icon {
+        width: 16px; height: 16px; border-radius: 4px;
+        background: linear-gradient(160deg, #1b2f55, #0c1526);
+        border: 1px solid rgba(122, 184, 255, 0.5);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 8px; color: #cfe4ff; font-weight: 700;
+      }
+
+      /* ---------- 代码编辑器 ---------- */
+      #win-editor { left: 90px; top: 60px; width: 1020px; height: 560px; }
+      .code {
+        padding: 18px 24px;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 15px;
+        line-height: 1.9;
+        color: #c7d3e8;
+        white-space: pre;
+      }
+      .code .kw { color: #c792ea; }
+      .code .cm { color: #6a7a94; }
+      .code .str { color: #7fd1b9; }
+      .code .num { color: #f0b47a; }
+      .hl {
+        background: rgba(74, 158, 255, 0.22);
+        border-radius: 3px;
+        box-shadow: inset 0 0 0 1px rgba(122, 184, 255, 0.35);
+      }
+
+      /* ---------- 翻译弹窗 ---------- */
+      #popup {
+        position: absolute;
+        max-width: 430px;
+        background: #f7f9fd;
+        color: #1b2434;
+        border-radius: 10px;
+        padding: 14px 16px;
+        font-size: 15px;
+        line-height: 1.65;
+        box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.06);
+        opacity: 0;
+        transform: translateY(6px) scale(0.98);
+        transition: opacity 0.18s ease, transform 0.18s ease;
+        z-index: 40;
+      }
+      #popup.show { opacity: 1; transform: translateY(0) scale(1); }
+      #popup .p-title {
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 17px; font-weight: 700;
+        padding-bottom: 8px; margin-bottom: 8px;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+      }
+      #popup .p-meta { font-size: 12px; color: #6b7a93; margin-bottom: 6px; letter-spacing: 0.3px; }
+      #popup .p-sense { display: flex; gap: 8px; font-size: 14px; margin-bottom: 4px; }
+      #popup .p-pos {
+        flex: 0 0 auto; min-width: 36px;
+        color: #2f7fe0; font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 12px; font-style: italic;
+      }
+      #popup .p-part { display: flex; gap: 8px; font-size: 13px; margin-bottom: 4px; }
+      #popup .p-raw {
+        font-family: "Cascadia Code", Consolas, monospace;
+        color: #2f7fe0; min-width: 66px;
+      }
+      #popup .p-hint {
+        font-size: 11px; color: #8b97ad;
+        border-top: 1px solid rgba(0, 0, 0, 0.07);
+        padding-top: 6px; margin-top: 8px;
+      }
+      #popup .p-hint b { color: #1b2434; }
+      #popup .p-err { color: #d64545; font-size: 13px; }
+      #popup .p-code {
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 12.5px; line-height: 1.8; white-space: pre;
+        color: #1b2434;
+      }
+      #popup .p-code .zh { color: #2f7fe0; font-weight: 600; }
+
+      /* ---------- 主窗口 ---------- */
+      #win-app { left: 340px; top: 90px; width: 520px; height: 560px; }
+      .app-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; height: calc(100% - 34px); }
+      .app-head { display: flex; align-items: center; justify-content: space-between; }
+      .app-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 6px; color: var(--ink); }
+      .app-title .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+      .app-actions { display: flex; gap: 6px; align-items: center; }
+      .chip {
+        height: 26px; padding: 0 10px; border-radius: 7px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--line);
+        color: var(--muted); font-size: 12px;
+        display: inline-flex; align-items: center;
+      }
+      .chip.primary { background: #2f7fe0; border-color: #2f7fe0; color: #fff; font-weight: 600; }
+      .app-label { font-size: 11px; color: var(--muted); letter-spacing: 0.6px; }
+      .app-area {
+        flex: 1; min-height: 0;
+        background: #0b1220;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 9px;
+        padding: 10px 12px;
+        font-size: 13.5px;
+        line-height: 1.7;
+        color: var(--ink);
+        font-family: "Cascadia Code", Consolas, monospace;
+        white-space: pre-wrap;
+      }
+      .app-area.result { border-left: 2px solid rgba(62, 207, 142, 0.6); }
+      .app-row { display: flex; justify-content: flex-end; gap: 8px; }
+      .app-status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+      .app-status .sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: inline-block; }
+
+      /* ---------- 设置页 ---------- */
+      #win-set { left: 300px; top: 74px; width: 600px; height: 590px; }
+      .set-body { padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; height: calc(100% - 34px); overflow: hidden; }
+      .set-head { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--ink); }
+      .set-back {
+        width: 26px; height: 26px; border-radius: 7px;
+        border: 1px solid var(--line); color: var(--muted);
+        display: flex; align-items: center; justify-content: center; font-size: 14px;
+      }
+      .set-row { border-bottom: 1px solid var(--line); padding-bottom: 11px; }
+      .set-row:last-child { border-bottom: none; }
+      .set-label { font-size: 11px; color: var(--muted); letter-spacing: 0.6px; margin-bottom: 7px; }
+      .set-line { display: flex; gap: 8px; flex-wrap: wrap; }
+      .pill {
+        height: 28px; padding: 0 12px; border-radius: 8px;
+        border: 1px solid var(--line); color: var(--muted);
+        font-size: 12px; display: inline-flex; align-items: center; gap: 7px;
+        background: transparent; transition: all 0.2s ease;
+      }
+      .pill::before {
+        content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dim);
+      }
+      .pill.on { color: var(--ink); border-color: rgba(62, 207, 142, 0.4); }
+      .pill.on::before {
+        background: var(--ok); box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.15);
+      }
+      .engines { display: flex; flex-direction: column; gap: 6px; }
+      .engine {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 9px 12px; border-radius: 8px;
+        border: 1px solid var(--line); font-size: 13px; color: var(--muted);
+        transition: all 0.25s ease;
+      }
+      .engine.active {
+        border-color: rgba(74, 158, 255, 0.5);
+        background: rgba(74, 158, 255, 0.08);
+        color: var(--ink);
+      }
+      .engine .tag { font-size: 11px; color: var(--dim); }
+
+      /* ---------- 浅色主题（演示用：点一下设置页就变亮） ---------- */
+      .win.light { background: #f6f7f9; border-color: #dde2ea; }
+      .win.light .titlebar { background: #eef1f5; color: #626a78; border-bottom-color: #dde2ea; }
+      .win.light .set-head, .win.light .app-title { color: #1f2430; }
+      .win.light .set-label, .win.light .app-label { color: #6b7280; }
+      .win.light .set-row { border-bottom-color: #e5e9f0; }
+      .win.light .pill { color: #626a78; border-color: #dde2ea; }
+      .win.light .pill.on { color: #1f2430; border-color: rgba(26, 160, 106, 0.4); }
+      .win.light .pill::before { background: #98a1ae; }
+      .win.light .pill.on::before { background: #1aa06a; }
+      .win.light .engine { color: #626a78; border-color: #e5e9f0; }
+      .win.light .engine.active {
+        background: rgba(47, 127, 224, 0.08);
+        border-color: rgba(47, 127, 224, 0.45);
+        color: #1f2430;
+      }
+      .win.light .engine .tag { color: #98a1ae; }
+      .win.light .app-area { background: #fff; color: #1f2430; border-color: #dde2ea; }
+      .win.light .chip { background: #fff; border-color: #dde2ea; color: #626a78; }
+      .win.light .chip.primary { background: #2f7fe0; border-color: #2f7fe0; color: #fff; }
+      .win.light .app-status { color: #6b7280; }
+      .win.light .set-back { border-color: #dde2ea; color: #626a78; }
+
+      /* ---------- 快捷键示意 ---------- */
+      #keys {
+        position: absolute; left: 50%; top: 230px; transform: translateX(-50%);
+        display: flex; gap: 46px; opacity: 0; transition: opacity 0.4s ease;
+      }
+      #keys.show { opacity: 1; }
+      .keygroup { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+      .keycaps { display: flex; align-items: center; gap: 7px; }
+      .keycap {
+        min-width: 54px; height: 48px; padding: 0 12px;
+        border-radius: 9px;
+        background: linear-gradient(180deg, #1b2740, #101a2e);
+        border: 1px solid rgba(122, 184, 255, 0.28);
+        box-shadow: 0 4px 0 rgba(0, 0, 0, 0.45), 0 0 18px rgba(74, 158, 255, 0.12);
+        color: var(--ink); font-size: 15px; font-weight: 600;
+        display: flex; align-items: center; justify-content: center;
+        transition: all 0.12s ease;
+      }
+      .keycap.press {
+        background: linear-gradient(180deg, #2f7fe0, #1d5fb0);
+        border-color: #7ab8ff;
+        box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5), 0 0 26px rgba(74, 158, 255, 0.55);
+        transform: translateY(3px);
+      }
+      .keylabel { font-size: 14px; color: var(--muted); }
+      .keylabel b { color: var(--ink); }
+
+      /* ---------- 字幕 / 章节 ---------- */
+      #caption {
+        position: absolute; left: 0; right: 0; bottom: 40px;
+        text-align: center; font-size: 21px; color: #dbe6f7;
+        letter-spacing: 0.3px; opacity: 0; transition: opacity 0.35s ease;
+        text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
+        padding: 0 40px;
+      }
+      #caption.show { opacity: 1; }
+      #caption b { color: #7ab8ff; font-weight: 700; }
+
+      #chapter {
+        position: absolute; left: 40px; top: 26px;
+        font-size: 12px; letter-spacing: 2px; color: var(--dim);
+        opacity: 0; transition: opacity 0.4s ease;
+      }
+      #chapter.show { opacity: 1; }
+      #chapter b { color: var(--glow); font-size: 13px; }
+
+      /* ---------- 光标 ---------- */
+      #cursor {
+        position: absolute; width: 22px; height: 28px; z-index: 60;
+        pointer-events: none; opacity: 0;
+        filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.5));
+        transition: opacity 0.2s ease;
+      }
+      #cursor.show { opacity: 1; }
+
+      /* ---------- 片尾 ---------- */
+      #endcard {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 18px;
+        opacity: 0; transition: opacity 0.6s ease; pointer-events: none;
+      }
+      #endcard.show { opacity: 1; }
+      .logo {
+        width: 132px; height: 132px; border-radius: 30px;
+        background: linear-gradient(160deg, #16233d, #0a1120);
+        border: 1px solid rgba(122, 184, 255, 0.35);
+        box-shadow: 0 0 60px rgba(74, 158, 255, 0.25), inset 0 0 30px rgba(74, 158, 255, 0.08);
+        display: flex; align-items: center; justify-content: center;
+      }
+      .logo .inner {
+        border: 1px solid rgba(122, 184, 255, 0.45);
+        border-radius: 10px; padding: 10px 16px;
+        box-shadow: 0 0 24px rgba(74, 158, 255, 0.25);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 22px; color: #eaf3ff; letter-spacing: 0.5px;
+      }
+      .logo .inner span { color: #7ab8ff; }
+      .end-title { font-size: 30px; font-weight: 700; color: #eaf3ff; letter-spacing: 1px; }
+      .end-sub { font-size: 15px; color: var(--muted); letter-spacing: 0.5px; }
+      .end-tags { display: flex; gap: 10px; margin-top: 6px; flex-wrap: wrap; justify-content: center; }
+      .end-tag {
+        font-size: 12px; color: var(--muted);
+        border: 1px solid var(--line); border-radius: 999px;
+        padding: 5px 14px;
+      }
+
+      html.instant * { transition: none !important; animation: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <!-- 代码编辑器（章节 1-5） -->
+      <div class="win" id="win-editor">
+        <div class="titlebar"><span class="tb-icon">T</span>trigger_events.txt — 你的模组</div>
+        <div class="code" id="editor-code"><span class="cm"># Keep the called workflow distinct from its caller's concurrency group;</span>
+<span class="cm"># an ordinary CI run should not cancel a full release validation.</span>
+<span class="kw">concurrency</span>:
+  <span class="kw">group</span>: build-single-exe-<span class="str">${{ github.workflow }}</span>
+  cancel-in-progress: <span class="str">${{ !inputs.release }}</span>
+
+<span class="cm"># 下面是真实模组里的脚本，全是英文标识符</span>
+has_completed_focus <span class="num">=</span> JAP_advance_one_hundred_million_fireballs
+has_completed_focus <span class="num">=</span> JAP_tennoheika_banzai
+has_completed_focus <span class="num">=</span> CHI_sea_dare_to_die_corps
+
+const cache = new Map(userProfileCache);</div>
+      </div>
+
+      <!-- 主窗口（章节 7） -->
+      <div class="win" id="win-app">
+        <div class="titlebar"><span class="tb-icon">T</span>划词翻译</div>
+        <div class="app-body">
+          <div class="app-head">
+            <div class="app-title">划词翻译 <span class="dot"></span></div>
+            <div class="app-actions">
+              <span class="chip">自动</span>
+              <span class="chip primary">框选</span>
+              <span class="chip">⚙</span>
+            </div>
+          </div>
+          <div class="app-label">原文</div>
+          <div class="app-area" id="app-src"></div>
+          <div class="app-row"><span class="chip">清除</span><span class="chip primary">翻译</span></div>
+          <div class="app-label">译文</div>
+          <div class="app-area result" id="app-dst"></div>
+          <div class="app-row"><span class="chip">复制</span></div>
+          <div class="app-status" id="app-status"></div>
+        </div>
+      </div>
+
+      <!-- 设置页（章节 8） -->
+      <div class="win" id="win-set">
+        <div class="titlebar"><span class="tb-icon">T</span>划词翻译 — 设置</div>
+        <div class="set-body">
+          <div class="set-head"><span class="set-back">←</span>设置</div>
+          <div class="set-row">
+            <div class="set-label">外观</div>
+            <div class="set-line">
+              <span class="pill" id="th-auto">跟随系统</span>
+              <span class="pill on" id="th-dark">深色</span>
+              <span class="pill" id="th-light">浅色</span>
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="set-label">翻译源 · 谁可用谁上</div>
+            <div class="engines">
+              <div class="engine active" id="en-dict"><span>本地词典 · 56 万词</span><span class="tag">离线 · 26 微秒</span></div>
+              <div class="engine" id="en-local"><span>本地模型 · Ollama</span><span class="tag">离线 · 0.5 秒</span></div>
+              <div class="engine" id="en-ds"><span>DeepSeek 云端</span><span class="tag">需 Key · 质量最高</span></div>
+              <div class="engine" id="en-mm"><span>MyMemory</span><span class="tag">免费兜底</span></div>
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="set-label">开关</div>
+            <div class="set-line">
+              <span class="pill on">划词翻译</span>
+              <span class="pill on">选中自动弹窗</span>
+              <span class="pill">中文也翻译</span>
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="set-label">快捷键</div>
+            <div class="set-line">
+              <span class="pill on">Ctrl+Alt+. 翻译</span>
+              <span class="pill on">Ctrl+Alt+Z 开关</span>
+              <span class="pill on">Ctrl+Alt+, 自动弹窗</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 快捷键示意（章节 6） -->
+      <div id="keys">
+        <div class="keygroup">
+          <div class="keycaps"><span class="keycap">Ctrl</span><span class="keycap">Alt</span><span class="keycap">.</span></div>
+          <div class="keylabel">选中后 <b>翻译</b></div>
+        </div>
+        <div class="keygroup">
+          <div class="keycaps"><span class="keycap">Ctrl</span><span class="keycap">Alt</span><span class="keycap">Z</span></div>
+          <div class="keylabel"><b>开关</b>划词翻译</div>
+        </div>
+        <div class="keygroup">
+          <div class="keycaps"><span class="keycap">Ctrl</span><span class="keycap">Alt</span><span class="keycap">,</span></div>
+          <div class="keylabel">关掉<b>自动弹窗</b></div>
+        </div>
+      </div>
+
+      <div id="popup"></div>
+
+      <svg id="cursor" viewBox="0 0 22 28">
+        <path d="M2 1 L2 22 L7.5 17.5 L11 25.5 L14.5 23.8 L11 16 L18 15.4 Z"
+              fill="#ffffff" stroke="#0b1220" stroke-width="1.6" stroke-linejoin="round" />
+      </svg>
+
+      <div id="chapter"></div>
+      <div id="caption"></div>
+
+      <div id="endcard">
+        <div class="logo"><div class="inner"><span>&gt;</span> Trans_</div></div>
+        <div class="end-title">划词翻译</div>
+        <div class="end-sub">选中即译 · 本地优先 · 代码可读</div>
+        <div class="end-tags">
+          <span class="end-tag">56 万词本地词典</span>
+          <span class="end-tag">四个翻译源</span>
+          <span class="end-tag">代码块兜底</span>
+          <span class="end-tag">深 / 浅双主题</span>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const stage = $("#stage");
+      const cursor = $("#cursor");
+      const popup = $("#popup");
+      const caption = $("#caption");
+      const chapter = $("#chapter");
+      const keys = $("#keys");
+      const endcard = $("#endcard");
+      const winEditor = $("#win-editor");
+      const winApp = $("#win-app");
+      const winSet = $("#win-set");
+
+      function fit() {
+        const s = Math.min(window.innerWidth / 1200, window.innerHeight / 760);
+        stage.style.transform = `scale(${s})`;
+        stage.style.marginTop = `${(window.innerHeight - 760 * s) / 2}px`;
+      }
+      window.addEventListener("resize", fit);
+      fit();
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      function toStage(el) {
+        const r = el.getBoundingClientRect();
+        const sr = stage.getBoundingClientRect();
+        const k = sr.width / 1200;
+        return { x: (r.left - sr.left) / k, y: (r.top - sr.top) / k, w: r.width / k, h: r.height / k };
+      }
+      function setCursor(x, y) {
+        cursor.style.left = x + "px";
+        cursor.style.top = y + "px";
+      }
+      async function moveCursor(x, y, ms = 520) {
+        const cx = parseFloat(cursor.style.left) || 0;
+        const cy = parseFloat(cursor.style.top) || 0;
+        const t0 = performance.now();
+        return new Promise((res) => {
+          function step(t) {
+            const k = Math.min(1, (t - t0) / ms);
+            const e = 1 - Math.pow(1 - k, 3);
+            setCursor(cx + (x - cx) * e, cy + (y - cy) * e);
+            if (k < 1) requestAnimationFrame(step);
+            else res();
+          }
+          requestAnimationFrame(step);
+        });
+      }
+      async function moveTo(el, ox = 0.5, oy = 0.5, ms = 520) {
+        const b = toStage(el);
+        await moveCursor(b.x + b.w * ox, b.y + b.h * oy, ms);
+      }
+      async function click() {
+        cursor.style.transform = "scale(0.85)";
+        await sleep(90);
+        cursor.style.transform = "";
+      }
+      function setCaption(html) {
+        if (!html) return caption.classList.remove("show");
+        caption.innerHTML = html;
+        caption.classList.add("show");
+      }
+      function setChapter(idx, title) {
+        if (!idx) return chapter.classList.remove("show");
+        chapter.innerHTML = `<b>${idx}</b>&nbsp;&nbsp;${title}`;
+        chapter.classList.add("show");
+      }
+      function showWin(el) { el.classList.add("show"); }
+      function hideWin(el) { el.classList.remove("show"); }
+      function showPopup(html, x, y) {
+        popup.innerHTML = html;
+        popup.style.left = x + "px";
+        popup.style.top = y + "px";
+        popup.classList.add("show");
+      }
+      function hidePopup() { popup.classList.remove("show"); }
+
+      /* 把编辑器里某个片段包上高亮（只替换第一次出现） */
+      function highlight(needle) {
+        const el = $("#editor-code");
+        if (!el || !el.innerHTML.includes(needle)) return null;
+        el.innerHTML = el.innerHTML.replace(needle, `<span class="hl">${needle}</span>`);
+        return el.querySelector(".hl");
+      }
+
+      /* ============================================================
+         章节
+         ============================================================ */
+
+      async function scene1_problem() {
+        setChapter("01", "问题");
+        showWin(winEditor);
+        cursor.classList.add("show");
+        setCursor(1120, 700);
+        setCaption("读英文代码时，最烦的不是看不懂");
+        await sleep(2400);
+        setCaption("而是<b>切屏 → 忘 → 切回来 → 再查一遍</b>");
+        await sleep(2600);
+      }
+
+      async function scene2_selection() {
+        setChapter("02", "划词翻译");
+        setCaption("在任何软件里拖选一段 —— 译文<b>立刻</b>出现在旁边");
+        const line = highlight("an ordinary CI run should not cancel a full release validation.");
+        const b = toStage(line || winEditor);
+        await moveTo(line || winEditor, 0.5, 0.5, 700);
+        await sleep(500);
+        showPopup(
+          `<div>一次普通的 CI 运行不应该取消同一 ref 上完整的发布验证。</div>
+           <div class="p-hint">翻译源：<b>DeepSeek 云端</b> · 耗时 0.9s</div>`,
+          b.x + 40, b.y + b.h + 14
+        );
+        await sleep(3400);
+        hidePopup();
+        await sleep(500);
+      }
+
+      async function scene3_dictionary() {
+        setChapter("03", "双击查词 · 本地词典");
+        setCaption("双击一个单词 —— <b>不联网、不调模型</b>，直接查表");
+        const w = highlight("Map");
+        const b = toStage(w || winEditor);
+        await moveTo(w || winEditor, 0.5, 0.5, 560);
+        await sleep(200);
+        await click();
+        await sleep(80);
+        await click();
+        showPopup(
+          `<div class="p-title">map</div>
+           <div class="p-meta">[mæp]　★★★　牛津核心</div>
+           <div class="p-sense"><span class="p-pos">n.</span><span>地图, 图谱, 映射</span></div>
+           <div class="p-sense"><span class="p-pos">vt.</span><span>映射, 绘制地图</span></div>
+           <div class="p-hint">翻译源：<b>本地词典（离线）</b> · <b>26 微秒</b></div>`,
+          b.x + b.w * 0.3, b.y + b.h + 14
+        );
+        await sleep(3600);
+        hidePopup();
+        await sleep(400);
+      }
+
+      async function scene4_identifier() {
+        setChapter("04", "代码标识符拆词");
+        setCaption("选中标识符 —— 按词根拆开，<b>逐词</b>给出含义");
+        const w = highlight("userProfileCache");
+        const b = toStage(w || winEditor);
+        await moveTo(w || winEditor, 0.5, 0.5, 600);
+        await sleep(150);
+        await click();
+        await sleep(80);
+        await click();
+        showPopup(
+          `<div class="p-title">userProfileCache</div>
+           <div class="p-part"><span class="p-raw">user</span><span>→</span><span>用户</span></div>
+           <div class="p-part"><span class="p-raw">Profile</span><span>→</span><span>资料 / 配置</span></div>
+           <div class="p-part"><span class="p-raw">Cache</span><span>→</span><span>缓存</span></div>
+           <div class="p-hint">按标识符拆词解释 · 秒出</div>`,
+          b.x + b.w * 0.2, b.y + b.h + 14
+        );
+        await sleep(3800);
+        hidePopup();
+        await sleep(400);
+      }
+
+      async function scene5_codeblock() {
+        setChapter("05", "代码块兜底 · 原格式保留");
+        setCaption("整段代码模型翻不了？<b>自动降级成逐词</b>，符号一个不动");
+        const w = highlight("JAP_advance_one_hundred_million_fireballs");
+        const b = toStage(w || winEditor);
+        await moveTo(w || winEditor, 0.6, 0.5, 620);
+        await sleep(300);
+        showPopup(
+          `<div class="p-err">翻译失败：模型没能翻译这段内容（返回了原文或语言不对）</div>
+           <div class="p-hint">正在自动降级…</div>`,
+          b.x + 20, b.y + b.h + 14
+        );
+        await sleep(1900);
+        showPopup(
+          `<div class="p-code">has_<span class="zh">完整的</span>_<span class="zh">焦点</span> = JAP_<span class="zh">前进</span>_<span class="zh">一(个)</span>_<span class="zh">百</span>_<span class="zh">百万</span>_fireballs
+has_<span class="zh">完整的</span>_<span class="zh">焦点</span> = JAP_tennoheika_banzai
+has_<span class="zh">完整的</span>_<span class="zh">焦点</span> = CHI_<span class="zh">海</span>_<span class="zh">挑战</span>_<span class="zh">到</span>_<span class="zh">死</span>_corps</div>
+           <div class="p-hint">逐词兜底 · 符号与换行<b>原样保留</b></div>`,
+          b.x - 60, b.y + b.h + 14
+        );
+        await sleep(4400);
+        hidePopup();
+        await sleep(400);
+      }
+
+      async function scene6_hotkeys() {
+        setChapter("06", "三个快捷键");
+        hideWin(winEditor);
+        cursor.classList.remove("show");
+        hidePopup();
+        keys.classList.add("show");
+        setCaption("不用点托盘 —— <b>三个键</b>覆盖全部状态");
+        await sleep(1400);
+        for (const group of document.querySelectorAll(".keygroup")) {
+          group.querySelectorAll(".keycap").forEach((c) => c.classList.add("press"));
+          await sleep(400);
+          group.querySelectorAll(".keycap").forEach((c) => c.classList.remove("press"));
+          await sleep(500);
+        }
+        await sleep(1500);
+        keys.classList.remove("show");
+        await sleep(300);
+      }
+
+      async function scene7_main() {
+        setChapter("07", "主窗口 · 输入即翻");
+        showWin(winApp);
+        await sleep(400);
+        const src = $("#app-src");
+        const dst = $("#app-dst");
+        const status = $("#app-status");
+        src.textContent = "";
+        dst.textContent = "";
+        status.textContent = "";
+        setCaption("直接把文字粘贴进来，按 <b>Ctrl + Enter</b> 翻译");
+        const text = "The boat moves fast across the river.";
+        for (const ch of text) {
+          src.textContent += ch;
+          await sleep(24);
+        }
+        await sleep(500);
+        status.innerHTML = `<span class="sdot" style="background:#4a9eff"></span>翻译中…`;
+        await sleep(900);
+        dst.textContent = "船快速地穿过河流。";
+        status.innerHTML = `<span class="sdot"></span>完成（DeepSeek 云端 → 英译中）`;
+        await sleep(2400);
+        setCaption("译文在下面，<b>复制</b>按钮就在它旁边");
+        await sleep(2200);
+      }
+
+      async function scene8_settings() {
+        setChapter("08", "设置 · 翻译源与主题");
+        hideWin(winApp);
+        showWin(winSet);
+        await sleep(400);
+        setCaption("四个翻译源，<b>谁可用谁上</b>");
+        for (const id of ["#en-local", "#en-ds", "#en-mm", "#en-dict"]) {
+          document.querySelectorAll(".engine").forEach((e) => e.classList.remove("active"));
+          $(id).classList.add("active");
+          await moveTo($(id), 0.5, 0.5, 420);
+          await sleep(680);
+        }
+        await sleep(500);
+        setCaption("外观：深色 / 浅色 / 跟随系统，<b>切换不闪烁</b>");
+        await moveTo($("#th-light"), 0.5, 0.5, 420);
+        await click();
+        $("#th-light").classList.add("on");
+        $("#th-dark").classList.remove("on");
+        winSet.classList.add("light");
+        await sleep(2000);
+        await moveTo($("#th-dark"), 0.5, 0.5, 380);
+        await click();
+        $("#th-dark").classList.add("on");
+        $("#th-light").classList.remove("on");
+        winSet.classList.remove("light");
+        await sleep(1500);
+      }
+
+      async function scene9_end() {
+        setChapter("", "");
+        hideWin(winSet);
+        setCaption("");
+        cursor.classList.remove("show");
+        endcard.classList.add("show");
+        await sleep(4500);
+        endcard.classList.remove("show");
+        await sleep(600);
+      }
+
+      async function play() {
+        await sleep(400);
+        await scene1_problem();
+        await scene2_selection();
+        await scene3_dictionary();
+        await scene4_identifier();
+        await scene5_codeblock();
+        await scene6_hotkeys();
+        await scene7_main();
+        await scene8_settings();
+        await scene9_end();
+        play();
+      }
+
+      /* ?t=秒 定格，便于截图核对章节画面 */
+      function seekTo(t) {
+        if (t < 5.2) {
+          showWin(winEditor); cursor.classList.add("show"); setCursor(1120, 700);
+          setChapter("01", "问题"); setCaption("读英文代码时，最烦的不是看不懂");
+        } else if (t < 13.5) {
+          showWin(winEditor); cursor.classList.add("show");
+          const w = highlight("an ordinary CI run should not cancel a full release validation.");
+          const b = toStage(w);
+          setChapter("02", "划词翻译");
+          setCaption("在任何软件里拖选一段 —— 译文<b>立刻</b>出现在旁边");
+          setCursor(b.x + b.w * 0.5, b.y + b.h * 0.5);
+          showPopup(`<div>一次普通的 CI 运行不应该取消同一 ref 上完整的发布验证。</div>
+            <div class="p-hint">翻译源：<b>DeepSeek 云端</b> · 耗时 0.9s</div>`, b.x + 40, b.y + b.h + 14);
+        } else if (t < 21.5) {
+          showWin(winEditor); cursor.classList.add("show");
+          const w = highlight("Map");
+          const b = toStage(w);
+          setChapter("03", "双击查词 · 本地词典");
+          setCaption("双击一个单词 —— <b>不联网、不调模型</b>，直接查表");
+          setCursor(b.x + b.w * 0.5, b.y + b.h * 0.5);
+          showPopup(`<div class="p-title">map</div>
+            <div class="p-meta">[mæp]　★★★　牛津核心</div>
+            <div class="p-sense"><span class="p-pos">n.</span><span>地图, 图谱, 映射</span></div>
+            <div class="p-sense"><span class="p-pos">vt.</span><span>映射, 绘制地图</span></div>
+            <div class="p-hint">翻译源：<b>本地词典（离线）</b> · <b>26 微秒</b></div>`,
+            b.x + b.w * 0.3, b.y + b.h + 14);
+        } else if (t < 30) {
+          showWin(winEditor); cursor.classList.add("show");
+          const w = highlight("userProfileCache");
+          const b = toStage(w);
+          setChapter("04", "代码标识符拆词");
+          setCaption("选中标识符 —— 按词根拆开，<b>逐词</b>给出含义");
+          setCursor(b.x + b.w * 0.5, b.y + b.h * 0.5);
+          showPopup(`<div class="p-title">userProfileCache</div>
+            <div class="p-part"><span class="p-raw">user</span><span>→</span><span>用户</span></div>
+            <div class="p-part"><span class="p-raw">Profile</span><span>→</span><span>资料 / 配置</span></div>
+            <div class="p-part"><span class="p-raw">Cache</span><span>→</span><span>缓存</span></div>
+            <div class="p-hint">按标识符拆词解释 · 秒出</div>`,
+            b.x + b.w * 0.2, b.y + b.h + 14);
+        } else if (t < 41) {
+          showWin(winEditor); cursor.classList.add("show");
+          const w = highlight("JAP_advance_one_hundred_million_fireballs");
+          const b = toStage(w);
+          setChapter("05", "代码块兜底 · 原格式保留");
+          setCaption("整段代码模型翻不了？<b>自动降级成逐词</b>，符号一个不动");
+          setCursor(b.x + b.w * 0.6, b.y + b.h * 0.5);
+          showPopup(`<div class="p-code">has_<span class="zh">完整的</span>_<span class="zh">焦点</span> = JAP_<span class="zh">前进</span>_<span class="zh">一(个)</span>_<span class="zh">百</span>_<span class="zh">百万</span>_fireballs
+has_<span class="zh">完整的</span>_<span class="zh">焦点</span> = JAP_tennoheika_banzai</div>
+            <div class="p-hint">逐词兜底 · 符号与换行<b>原样保留</b></div>`,
+            b.x - 60, b.y + b.h + 14);
+        } else if (t < 48) {
+          keys.classList.add("show");
+          setChapter("06", "三个快捷键");
+          setCaption("不用点托盘 —— <b>三个键</b>覆盖全部状态");
+        } else if (t < 57) {
+          showWin(winApp);
+          setChapter("07", "主窗口 · 输入即翻");
+          setCaption("直接把文字粘贴进来，按 <b>Ctrl + Enter</b> 翻译");
+          $("#app-src").textContent = "The boat moves fast across the river.";
+          $("#app-dst").textContent = "船快速地穿过河流。";
+          $("#app-status").innerHTML = `<span class="sdot"></span>完成（DeepSeek 云端 → 英译中）`;
+        } else if (t < 67) {
+          showWin(winSet);
+          setChapter("08", "设置 · 翻译源与主题");
+          setCaption("四个翻译源，<b>谁可用谁上</b>");
+          document.querySelectorAll(".engine").forEach((e) => e.classList.remove("active"));
+          $("#en-dict").classList.add("active");
+          $("#th-dark").classList.add("on");
+          $("#th-light").classList.remove("on");
+        } else {
+          endcard.classList.add("show");
+        }
+      }
+
+      const params = new URLSearchParams(location.search);
+      if (params.has("t")) {
+        document.documentElement.classList.add("instant");
+        requestAnimationFrame(() => requestAnimationFrame(() => seekTo(parseFloat(params.get("t")))));
+      } else {
+        play();
+      }
+    </script>
+  </body>
+</html>

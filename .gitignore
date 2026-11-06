@@ -1,0 +1,18 @@
+# 构建产物
+/target
+/src-tauri/target
+/dist
+node_modules/
+
+# 词典源数据与成品
+/data/ecdict
+/data/*.zip
+/data/*.db
+/data/dict.bin
+
+# 打包工具链
+/nsis-3.11
+/nsis-3.11.zip
+
+# 日志与临时
+*.log

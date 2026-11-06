@@ -1,0 +1,199 @@
+/* 选区弹窗样式。
+   设计目标（参考有道那类词典的信息层级，而不是照抄外观）：
+   - 主信息大而清楚，次要信息小而灰，两者之间用分隔线分开
+   - 不用渐变、不用花哨阴影，靠留白和字号层级取胜
+   - 圆角 8px，内边距 12~14px */
+
+:root {
+  --bg: #1f2128;
+  --text: #eef2fb;
+  --muted: #8b93a7;
+  --dim: #767e91;
+  --accent: #7ab8ff;
+  --err: #ff8a8a;
+  --line: rgba(255, 255, 255, 0.08);
+  --key: #9ecbff; /* 代码模式里子词的原文色 */
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: auto;
+  min-height: 100%;
+  /* 不透明窗口：卡片直接铺满整个窗口。
+     试过 transparent(true) + 外阴影，但在 WebView2 上会出现
+     "半透明灰底 + 硬边"的渲染问题，多种留白/阴影组合都消不掉，
+     所以退回最稳的方案：窗口本身就是卡片。 */
+  background: var(--bg);
+  overflow: hidden;
+  font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#wrap {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 不设圆角：窗口是方的，圆角会和窗口边界对不上，出现"两个框" */
+  border-radius: 0;
+  background: var(--bg);
+  /* 什么都不加：不描边、不外阴影。
+     任何贴在窗口边缘的 1px 线都会被看成"多余的边框"
+     （之前那圈 inset 描边就是一直被吐槽的白线）。 */
+}
+
+/* ---- 代码模式标题：原始标识符 ---- */
+#title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+  line-height: 1.35;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+/* ---- 加载中显示的原文 ---- */
+#src {
+  font-size: 12px;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* ---- 普通译文 ---- */
+#dst {
+  font-size: 15px;
+  color: var(--text);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- 代码模式：拆词列表 ---- */
+#parts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.part {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.part .raw {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--key);
+  min-width: 62px;
+  word-break: break-all;
+}
+
+.part .arrow {
+  color: var(--dim);
+  flex: 0 0 auto;
+}
+
+.part .meaning {
+  color: var(--text);
+  word-break: break-word;
+}
+
+.part .note {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+/* ---- 词典模式：一行一个词性 ---- */
+#senses {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sense {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+/* 音标 / 星级 / 牛津核心 这一行（仅本地词典有） */
+.dict-meta {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+
+.sense .pos {
+  flex: 0 0 auto;
+  min-width: 34px;
+  color: var(--key);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.sense .meanings {
+  color: var(--text);
+  word-break: break-word;
+}
+
+/* ---- 错误 ---- */
+#err {
+  font-size: 12px;
+  color: var(--err);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* ---- 底部状态提示：缓存命中 / 兜底来源 / 耗时 ---- */
+#hint {
+  font-size: 11px;
+  color: var(--dim);
+  /* 分隔线只占内容宽度的一部分，避免和卡片圆角"打架" */
+  border-top: 1px solid var(--line);
+  padding-top: 7px;
+  margin-top: 1px;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+/* ============================================================
+   浅色主题（浮窗）
+   深色浮窗靠"底色差"就能和网页分开；浅色浮窗在白底网页上会糊在一起，
+   所以额外加一圈极淡的描边 —— 这是浅色主题唯一必须的例外。
+   ============================================================ */
+
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --dim: #98a1ae;
+  --accent: #2f7fe0;
+  --err: #d64545;
+  --line: rgba(16, 24, 40, 0.09);
+  --key: #2f7fe0;
+}
+
+:root[data-theme="light"] #wrap {
+  box-shadow: inset 0 0 0 1px rgba(16, 24, 40, 0.1);
+}

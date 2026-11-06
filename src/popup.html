@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>译</title>
+    <script type="module" src="/popup.js" defer></script>
+  </head>
+  <body>
+    <div id="wrap">
+      <!-- 代码模式：原始标识符作标题 -->
+      <div id="title"></div>
+      <!-- 原文（加载中时显示） -->
+      <div id="src"></div>
+      <!-- 普通译文 -->
+      <div id="dst"></div>
+      <!-- 代码模式：拆词列表 -->
+      <div id="parts"></div>
+      <!-- 词典模式：词性 + 多条含义 -->
+      <div id="senses"></div>
+      <!-- 错误 -->
+      <div id="err"></div>
+      <!-- 底部状态行 -->
+      <div id="hint"></div>
+    </div>
+  </body>
+</html>

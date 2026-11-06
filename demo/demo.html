@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Demo Material — 即时翻译</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1f2430;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --accent: #7c3aed;
+        --code-bg: #f6f7f9;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 48px 64px 120px;
+        font-family: "Segoe UI", system-ui, "Microsoft YaHei", sans-serif;
+        font-size: 18px;
+        line-height: 1.8;
+        color: var(--fg);
+        background: var(--bg);
+        max-width: 1000px;
+        margin-inline: auto;
+      }
+      h1 {
+        font-size: 30px;
+        margin: 0 0 6px;
+        letter-spacing: -0.3px;
+      }
+      .lede {
+        color: var(--muted);
+        font-size: 15px;
+        margin-bottom: 36px;
+        padding-bottom: 20px;
+        border-bottom: 1px solid var(--line);
+      }
+      h2 {
+        font-size: 21px;
+        margin: 40px 0 10px;
+        padding-left: 12px;
+        border-left: 4px solid var(--accent);
+      }
+      .tip {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 0 0 14px;
+      }
+      p { margin: 0 0 16px; }
+
+      /* 单词卡片区：方便双击 */
+      .words {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin: 18px 0 8px;
+      }
+      .word {
+        padding: 10px 18px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-size: 20px;
+        font-weight: 500;
+        background: #fafafa;
+        user-select: text;
+      }
+
+      /* 代码块 */
+      pre {
+        background: var(--code-bg);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 20px 22px;
+        overflow-x: auto;
+        font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+        font-size: 15px;
+        line-height: 1.75;
+        margin: 14px 0 8px;
+      }
+      .cmt { color: #7c8598; }
+      .kw { color: #7c3aed; }
+      .str { color: #0f766e; }
+
+      footer {
+        margin-top: 56px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Reading the Source</h1>
+    <div class="lede">
+      A short technical note used as demo material. Select any text to translate.
+    </div>
+
+    <!-- ① 句子/段落翻译 -->
+    <h2>Overview</h2>
+    <p class="tip">拖拽选中下面任意一句 → 松手即出译文</p>
+    <p>
+      The translation service keeps a small in-memory cache so that repeated lookups
+      of the same phrase return instantly without touching the network. When the cache
+      misses, the request is forwarded to a local model first, and only if that model
+      is unavailable does it fall back to a remote endpoint.
+    </p>
+    <p>
+      Every selection is captured with a global mouse hook rather than accessibility
+      APIs, because most applications do not expose their text selection to the system.
+      The hook only decides whether a selection happened; the actual text extraction is
+      performed on a worker thread, so the operating system's input queue is never
+      blocked.
+    </p>
+
+    <!-- ② 单词 / 词典模式 -->
+    <h2>Common Terms</h2>
+    <p class="tip">双击任意一个单词 → 音标 + 星级 + 多词性释义</p>
+    <div class="words">
+      <span class="word">compile</span>
+      <span class="word">refactor</span>
+      <span class="word">inventory</span>
+      <span class="word">infrastructure</span>
+      <span class="word">division</span>
+      <span class="word">exception</span>
+    </div>
+
+    <!-- ③ 代码标识符拆词 -->
+    <h2>Configuration</h2>
+    <p class="tip">双击代码里的标识符 → 拆成词根逐词解释</p>
+    <pre><span class="cmt">// license check</span>
+<span class="kw">const</span> BUYOUT_SECRET = <span class="str">"translator-19"</span>;
+<span class="kw">const</span> machineCode = <span class="str">"8A3F5C21"</span>;
+
+<span class="kw">function</span> makeLicenseCode(machineCode) {
+  <span class="kw">const</span> lastUpdateTime = Date.now();
+  <span class="kw">const</span> userProfileCacheInvalidator = <span class="kw">new</span> Map();
+  <span class="kw">return</span> hash(BUYOUT_SECRET + machineCode);
+}</pre>
+
+    <p>
+      Each identifier is composed of several words. Reading them one by one is usually
+      faster than guessing at the whole name.
+    </p>
+
+    <footer>
+      即时翻译 · Demo material — 可直接录制，无需改动
+    </footer>
+  </body>
+</html>

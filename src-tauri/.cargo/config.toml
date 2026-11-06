@@ -1,0 +1,16 @@
+# 让 cargo 能找到 MSVC 链接器（link.exe）。
+#
+# 背景：本机的 Visual Studio 和 Windows SDK 都装在非默认位置——
+#   VS  ︎: E:\visual\ide
+#   SDK : E:\Windows Kits\10
+# 所以 link.exe 虽然装了，却不在 PATH 里，导致 `cargo build` 报
+# "linker `link.exe` not found"。
+#
+# 这里只给 cargo 的构建进程注入 PATH，不去改系统环境变量——
+# 改系统变量要注销/重启才生效，而且会影响别的软件。
+#
+# 注意：`[env]` 的值必须是**字面字符串**，cargo 不会做变量展开，
+# 所以这里把两个绝对路径写死。**VS 升级换 MSVC 版本号后需要更新第一行。**
+
+[env]
+PATH = "E:\\visual\\ide\\VC\\Tools\\MSVC\\14.51.36231\\bin\\Hostx64\\x64;E:\\Windows Kits\\10\\bin\\10.0.26100.0\\x64;C:\\Users\\amsit\\.cargo\\bin;C:\\msys64\\ucrt64\\bin;C:\\Program Files\\Git\\cmd;C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0"

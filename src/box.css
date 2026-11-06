@@ -1,0 +1,41 @@
+:root {
+  --dim: rgba(0, 0, 0, 0.35);
+  --accent: #4a9eff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--dim);
+  cursor: crosshair;
+  font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+#hint {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.65);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+#sel {
+  position: fixed;
+  display: none;
+  border: 2px solid var(--accent);
+  background: rgba(74, 158, 255, 0.15);
+  pointer-events: none;
+}
