@@ -16,6 +16,9 @@ use serde::Serialize;
 /// MyMemory 注册邮箱（免费提额 key）。由设置写入，请求时带 `de` 参数。
 pub static MYMEMORY_EMAIL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
+/// 百度翻译开放平台凭据：(APPID, 密钥)。由设置写入，请求时算签名。
+pub static BAIDU_CRED: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
 /// 本地引擎配置（OpenAI 兼容端点的地址与模型名）。
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LocalConfig {
@@ -1173,6 +1176,7 @@ pub fn get(id: &str, cfg: &LocalConfig) -> Option<Box<dyn Translator>> {
         "deepseek" => Some(Box::new(DeepSeekEngine { cfg: cfg.clone() })),
         "mymemory" => Some(Box::new(MyMemoryEngine)),
         "google" => Some(Box::new(GoogleEngine)),
+        "baidu" => Some(Box::new(BaiduEngine)),
         _ => None,
     }
 }
@@ -1185,12 +1189,154 @@ pub fn list() -> Vec<(&'static str, &'static str, bool)> {
         ("deepseek", "DeepSeek 云端 (需 API Key)", false),
         ("mymemory", "MyMemory (免费/国内可用)", false),
         ("google", "Google 免费 (逆向·勿商用)", false),
+        ("baidu", "百度翻译 (需 APPID·国内快)", false),
     ]
 }
 
 /// 引擎 id 是否合法
 pub fn exists(id: &str) -> bool {
-    matches!(id, "dict" | "local" | "deepseek" | "mymemory" | "google")
+    matches!(id, "dict" | "local" | "deepseek" | "mymemory" | "google" | "baidu")
+}
+
+
+// ---------------- 百度翻译（开放平台 API） ----------------
+
+/// 百度支持的目标语言代码和通用写法不一样，这里做一次映射。
+fn baidu_lang(target: &str) -> &'static str {
+    match target {
+        "en" => "en",
+        "ja" => "jp",
+        "ko" => "kor",
+        "fr" => "fra",
+        "de" => "de",
+        "es" => "spa",
+        "ru" => "ru",
+        "zh-TW" => "cht",
+        _ => "zh",
+    }
+}
+
+pub struct BaiduEngine;
+
+#[async_trait]
+impl Translator for BaiduEngine {
+    async fn translate(&self, text: &str, target_lang: &str) -> Result<Translation, String> {
+        let (appid, key) = BAIDU_CRED
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("百度翻译未配置：在设置里填 APPID 和密钥")?;
+        let to = baidu_lang(target_lang);
+
+        // 百度要求单次 ≤2000 字符，这里按 1500 切块，尽量在标点处断开
+        let chunks = split_for_baidu(text, 1500);
+        let mut out: Vec<String> = Vec::new();
+        for chunk in chunks {
+            out.push(baidu_once(&appid, &key, &chunk, to).await?);
+        }
+        let translated = out.join("\n");
+        if translated.trim().is_empty() {
+            return Err("百度翻译返回空结果".into());
+        }
+        Ok(Translation {
+            translated,
+            source: "baidu".into(),
+            target: target_lang.to_string(),
+            cached: false,
+            hit_count: 0,
+            parts: Vec::new(),
+            senses: Vec::new(),
+        })
+    }
+}
+
+async fn baidu_once(appid: &str, key: &str, text: &str, to: &str) -> Result<String, String> {
+    let salt = format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let sign = crate::md5::md5_hex(format!("{appid}{text}{salt}{key}").as_bytes());
+
+    let params = [
+        ("q", text),
+        ("from", "auto"),
+        ("to", to),
+        ("appid", appid),
+        ("salt", salt.as_str()),
+        ("sign", sign.as_str()),
+    ];
+
+    let resp = http()
+        .post("https://fanyi-api.baidu.com/api/trans/vip/translate")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("百度翻译网络错误: {e}"))?;
+
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("百度翻译返回无法解析: {e}"))?;
+
+    if let Some(code) = v["error_code"].as_str() {
+        let hint = match code {
+            "52001" => "请求超时，重试一次",
+            "52002" => "服务端错误，稍后再试",
+            "52003" => "APPID 无效（检查设置）",
+            "54001" => "签名错误（多半是密钥填错了）",
+            "54003" => "请求过于频繁（免费版有 QPS 限制）",
+            "54004" => "账户余额不足",
+            "54005" => "长查询请求频繁，稍后再试",
+            "58000" => "客户端 IP 非法",
+            "58001" => "语言方向不支持",
+            "58002" => "服务已关闭",
+            _ => "未知错误",
+        };
+        return Err(format!("百度翻译 {code}：{hint}"));
+    }
+
+    let arr = v["trans_result"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let dst = arr
+        .iter()
+        .filter_map(|x| x["dst"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if dst.trim().is_empty() {
+        return Err("百度翻译返回空结果".into());
+    }
+    Ok(dst)
+}
+
+/// 按字符数切块，优先在换行/句末断开，避免把一句话劈成两半。
+fn split_for_baidu(text: &str, limit: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= limit {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let end = (start + limit).min(chars.len());
+        let mut cut = end;
+        if end < chars.len() {
+            // 往回找最近的断点
+            for i in (start + limit / 2..end).rev() {
+                if matches!(chars[i], '\n' | '。' | '.' | '!' | '?' | '；' | ';') {
+                    cut = i + 1;
+                    break;
+                }
+            }
+        }
+        out.push(chars[start..cut].iter().collect());
+        start = cut;
+    }
+    out
 }
 
 #[cfg(test)]

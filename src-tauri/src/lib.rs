@@ -1,6 +1,7 @@
 mod cache;
 mod dict;
 mod glossary;
+mod md5;
 pub mod engine;
 mod ocr;
 mod selection;
@@ -1055,6 +1056,42 @@ fn set_translate_enabled(
         let _ = store.save();
     }
     Ok(value)
+}
+
+/// 百度翻译凭据：保存后立即生效（只写本机设置，不进代码仓库）
+#[tauri::command]
+fn set_baidu_cred(app: tauri::AppHandle, appid: String, key: String) -> Result<bool, String> {
+    let appid = appid.trim().to_string();
+    let key = key.trim().to_string();
+    if appid.is_empty() || key.is_empty() {
+        if let Ok(mut g) = engine::BAIDU_CRED.lock() {
+            *g = None;
+        }
+        if let Ok(store) = app.store(SETTINGS_FILE) {
+            let _ = store.set("baidu_appid", serde_json::json!(""));
+            let _ = store.set("baidu_key", serde_json::json!(""));
+            let _ = store.save();
+        }
+        return Ok(false);
+    }
+    if let Ok(mut g) = engine::BAIDU_CRED.lock() {
+        *g = Some((appid.clone(), key.clone()));
+    }
+    if let Ok(store) = app.store(SETTINGS_FILE) {
+        let _ = store.set("baidu_appid", serde_json::json!(appid));
+        let _ = store.set("baidu_key", serde_json::json!(key));
+        let _ = store.save();
+    }
+    Ok(true)
+}
+
+/// 百度翻译是否已配置
+#[tauri::command]
+fn get_baidu_configured() -> bool {
+    engine::BAIDU_CRED
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
 }
 
 /// 是否启用本地翻译缓存（关掉后每次都重新请求，方便"翻错了重刷"）
@@ -2838,6 +2875,24 @@ pub fn run() {
                 dict: Mutex::new(dict),
             });
 
+            // 载入百度翻译凭据
+            if let Ok(store) = app.store(SETTINGS_FILE) {
+                let appid = store
+                    .get("baidu_appid")
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+                let key = store
+                    .get("baidu_key")
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+                if !appid.trim().is_empty() && !key.trim().is_empty() {
+                    if let Ok(mut g) = engine::BAIDU_CRED.lock() {
+                        *g = Some((appid, key));
+                    }
+                    eprintln!("[百度] 已载入 APPID");
+                }
+            }
+
             // 载入 MyMemory 邮箱（免费提额），供引擎使用
             if let Ok(store) = app.store(SETTINGS_FILE) {
                 if let Some(email) = store
@@ -3151,6 +3206,8 @@ pub fn run() {
             set_translate_enabled,
             get_cn_ok,
             get_auto_popup,
+            set_baidu_cred,
+            get_baidu_configured,
             get_cache_on,
             set_cache_on,
             get_target_lang,

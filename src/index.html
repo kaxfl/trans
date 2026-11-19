@@ -63,6 +63,21 @@
         </section>
 
         <section class="setting-row">
+          <label class="label">百度翻译（国内直连 · 最快）</label>
+          <div class="manual">
+            <input id="baidu-appid" type="text" class="input" placeholder="APPID" />
+            <input id="baidu-key" type="password" class="input" placeholder="密钥" />
+          </div>
+          <div class="manual">
+            <button id="baidu-save" class="btn small">保存</button>
+            <span class="hint" id="baidu-status">未配置</span>
+          </div>
+          <p class="hint">
+            到 <b>fanyi-api.baidu.com</b> 申请「通用文本翻译」，填入 APPID 与密钥。<br />
+            只存在本机设置里，不会写进程序或代码仓库。国内直连、约 0.2 秒/句。
+          </p>
+        </section>
+        <section class="setting-row">
           <label class="label">目标语言</label>
           <div class="manual">
             <select id="target-lang" class="select">

@@ -267,6 +267,7 @@ enabledToggleEl.addEventListener("click", async () => {
     loadVersion();
     loadTargetLang();
     refreshCacheToggle();
+    refreshBaidu();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -288,6 +289,7 @@ cnToggleEl.addEventListener("click", async () => {
     loadVersion();
     loadTargetLang();
     refreshCacheToggle();
+    refreshBaidu();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -531,6 +533,7 @@ refreshSwitches();
     loadVersion();
     loadTargetLang();
     refreshCacheToggle();
+    refreshBaidu();
 refreshHotkeyStatus();
 
 // ---- 关于：版本号 + 检查更新 ----
@@ -584,4 +587,25 @@ document.querySelector("#cache-toggle")?.addEventListener("click", async () => {
     btn.classList.toggle("on", next);
     btn.textContent = next ? "本地缓存：开启" : "本地缓存：关闭";
   } catch (e) {}
+});
+
+// ---- 百度翻译凭据 ----
+async function refreshBaidu() {
+  try {
+    const ok = await invoke("get_baidu_configured");
+    const st = document.querySelector("#baidu-status");
+    if (st) st.textContent = ok ? "已配置" : "未配置";
+  } catch (e) {}
+}
+
+document.querySelector("#baidu-save")?.addEventListener("click", async () => {
+  const appid = document.querySelector("#baidu-appid").value.trim();
+  const key = document.querySelector("#baidu-key").value.trim();
+  const st = document.querySelector("#baidu-status");
+  try {
+    const ok = await invoke("set_baidu_cred", { appid, key });
+    if (st) st.textContent = ok ? "已保存，可在「翻译引擎」里选百度翻译" : "已清空";
+  } catch (e) {
+    if (st) st.textContent = "保存失败：" + e;
+  }
 });
