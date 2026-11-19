@@ -108,7 +108,7 @@
           <p class="hint">
             <strong>双击选中一个词、或拖拽选中一段，译文立刻弹出；鼠标移开选区弹窗自动消失，移回去又能再翻一次。</strong><br />
             靠全局鼠标钩子实现，不依赖目标软件的无障碍接口，浏览器 / VSCode / QQ / PDF 阅读器都能用。<br />
-            如果抓不到，可以：① 选中后按 <strong>Alt + .</strong>；② 用「框选」按钮走 OCR。
+            如果抓不到，可以：① 选中后按 <strong>Ctrl + Alt + .</strong>；② 用「框选」按钮走 OCR。
           </p>
           <div class="manual">
             <button id="hover-toggle" class="btn small toggle">触发方式：选中即翻译（推荐）</button>
@@ -126,7 +126,7 @@
           <p class="hint">
             关掉「划词翻译」后，<strong>选中任何文字都不会弹窗</strong>（主窗口里手动点「翻译」仍然可用）。<br />
             「中文也翻译」<strong>默认关闭</strong>：只翻译英文，选中中文时不会弹窗——避免点中中文段落就被翻译。<br />
-            需要临时单次翻译时，按快捷键 <code>Alt + .</code>（可改）。
+            需要临时单次翻译时，按快捷键 <code>Ctrl + Alt + .</code>（可改）。
           </p>
         </section>
 
@@ -167,7 +167,7 @@
           </div>
           <p class="hint">
             点击输入框 → 直接按组合键自动填入；与其它软件冲突则换一个。<strong>当前默认：Ctrl + Alt + .</strong><br />
-            另外两个固定热键：<code>Ctrl + Alt + Z</code> 切换划词开关，<code>Ctrl + Alt + ,</code> 切换「选中自动弹窗」。
+            另外三个固定热键：<code>Ctrl + Alt + Z</code> 切换划词开关，<code>Ctrl + Alt + ,</code> 切换「选中自动弹窗」，<code>Ctrl + Alt + S</code> 框选截图翻译。
           </p>
           <p id="hotkey-status" class="hint"></p>
         </section>

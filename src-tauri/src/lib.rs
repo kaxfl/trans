@@ -50,6 +50,9 @@ pub const DEFAULT_TOGGLE_HOTKEY: &str = "ctrl+alt+z";
 pub const DEFAULT_HIDE_HOTKEY: &str = "ctrl+alt+comma";
 pub const DEFAULT_WINDOW_HOTKEY: &str = "alt+enter";
 
+/// 框选截图翻译热键（默认 Ctrl+Alt+S，S = Screenshot）
+pub const DEFAULT_BOX_HOTKEY: &str = "ctrl+alt+s";
+
 /// 设置页面返回的引擎信息
 #[derive(Serialize)]
 struct EngineInfo {
@@ -1257,6 +1260,10 @@ fn apply_hotkeys(app: &tauri::AppHandle, translate: &str, window: &str) {
         if let Err(e) = app.global_shortcut().register(Shortcut::new(Some(m), k)) {
             problems.push(format!("收起浮窗热键 {DEFAULT_HIDE_HOTKEY} 注册失败：{e}"));
         }
+    }    if let Some((m, k)) = parse_hotkey(DEFAULT_BOX_HOTKEY) {
+        if let Err(e) = app.global_shortcut().register(Shortcut::new(Some(m), k)) {
+            problems.push(format!("框选热键 {DEFAULT_BOX_HOTKEY} 注册失败：{e}"));
+        }
     }
     let msg = if problems.is_empty() {
         "热键已注册".to_string()
@@ -2258,7 +2265,13 @@ pub fn run() {
                         let is_hide = parse_hotkey(DEFAULT_HIDE_HOTKEY)
                             .map(|(m, k)| (m, k) == (sc.mods, sc.key))
                             .unwrap_or(false);
-                        eprintln!("[热键] is_window={is_window} is_toggle={is_toggle}，准备执行");
+                        // 是否是"框选截图翻译"的热键
+                        let is_box = parse_hotkey(DEFAULT_BOX_HOTKEY)
+                            .map(|(m, k)| (m, k) == (sc.mods, sc.key))
+                            .unwrap_or(false);
+                        eprintln!(
+                            "[热键] is_window={is_window} is_toggle={is_toggle} is_hide={is_hide} is_box={is_box}，准备执行"
+                        );
                         let h = app.clone();
                         tauri::async_runtime::spawn(async move {
                             eprintln!("[热键] 任务开始执行");
@@ -2266,6 +2279,9 @@ pub fn run() {
                                 toggle_translation(&h).await;
                             } else if is_hide {
                                 toggle_auto_popup(&h).await;
+                            } else if is_box {
+                                // 框选截图翻译：拉起全屏遮罩，等用户拖框
+                                let _ = start_box(h).await;
                             } else if is_window {
                                 show_main_window(&h).await;
                             } else {

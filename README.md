@@ -189,7 +189,7 @@ Get-NetTCPConnection -LocalPort 11434 -State Listen
 ## 已知限制
 
 - **仅 Windows**（重度依赖 Win32 API）
-- 部分软件会拦截合成按键，取词失败时请用 `Alt + .` 或框选 OCR
+- 部分软件会拦截合成按键，取词失败时请用 `Ctrl + Alt + .` 或框选 OCR
 - 以管理员身份运行的窗口，需要本程序也以管理员运行才能取词
 - ECDICT 对较新的编程词汇（如 `refactor`）覆盖不全，这类词在逐词兜底时会保持英文原文
 
