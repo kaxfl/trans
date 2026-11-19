@@ -3911,7 +3911,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-app"
-version = "1.9.9"
+version = "2.0.0"
 dependencies = [
  "arboard",
  "async-trait",

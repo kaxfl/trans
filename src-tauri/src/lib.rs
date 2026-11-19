@@ -2766,6 +2766,29 @@ fn set_engine(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 任务栏（Explorer 的 shell）是否已经就绪。
+///
+/// 开机自启时程序常常比 Explorer 先起来：此时创建窗口、注册托盘图标，
+/// 任务栏会登记一个**点了没反应的死按钮**（本机实测如此）。所以自启场景下
+/// 必须先等 `Shell_TrayWnd` 窗口出现，再往下走。
+#[cfg(target_os = "windows")]
+fn shell_ready() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> *mut core::ffi::c_void;
+    }
+    let name: Vec<u16> = "Shell_TrayWnd"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe { !FindWindowW(name.as_ptr(), std::ptr::null()).is_null() }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_ready() -> bool {
+    true
+}
+
 pub fn run() {
     // 声明进程为"每显示器 DPI 感知 v2"。
     //
@@ -2780,6 +2803,22 @@ pub fn run() {
             SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         };
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+
+    // 开机自启（--minimized）时，先等任务栏就绪再建窗口。
+    // 最多等 20 秒；正常开机 3–8 秒就绪。等待期间不建任何窗口，
+    // 避免任务栏登记出"点了没反应的死按钮"。
+    if std::env::args().any(|a| a == "--minimized") {
+        let mut waited = 0u64;
+        while !shell_ready() && waited < 20_000 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            waited += 200;
+        }
+        if waited > 0 {
+            eprintln!("[启动] 等待任务栏就绪 {waited} ms");
+        }
+        // 再给 Explorer 一点缓冲，托盘图标才挂得稳
+        std::thread::sleep(std::time::Duration::from_millis(600));
     }
 
     tauri::Builder::default()
