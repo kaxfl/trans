@@ -263,8 +263,10 @@ enabledToggleEl.addEventListener("click", async () => {
     const cur = await invoke("get_translate_enabled");
     await invoke("set_translate_enabled", { value: !cur });
     refreshSwitches();
-loadTheme();
-refreshHotkeyStatus();
+    loadTheme();
+    loadVersion();
+    loadTargetLang();
+    refreshHotkeyStatus();
   } catch (e) {}
 });
 
@@ -281,8 +283,10 @@ cnToggleEl.addEventListener("click", async () => {
     const cur = await invoke("get_cn_ok");
     await invoke("set_cn_ok", { value: !cur });
     refreshSwitches();
-loadTheme();
-refreshHotkeyStatus();
+    loadTheme();
+    loadVersion();
+    loadTargetLang();
+    refreshHotkeyStatus();
   } catch (e) {}
 });
 
@@ -521,5 +525,39 @@ loadCloudConfig();
 refreshMonitor();
 refreshToggles();
 refreshSwitches();
-loadTheme();
+    loadTheme();
+    loadVersion();
+    loadTargetLang();
 refreshHotkeyStatus();
+
+// ---- 关于：版本号 + 检查更新 ----
+async function loadVersion() {
+  try {
+    const v = await invoke("get_version");
+    const pill = document.querySelector("#version-pill");
+    if (pill) pill.textContent = "版本 " + v;
+  } catch (e) {}
+}
+
+document.querySelector("#check-update")?.addEventListener("click", async () => {
+  try {
+    await invoke("open_url", { url: "https://github.com/kaxfl/trans/releases/latest" });
+  } catch (e) {
+    statusEl.textContent = "打开浏览器失败：" + e;
+  }
+});
+
+// ---- 目标语言 ----
+async function loadTargetLang() {
+  const sel = document.querySelector("#target-lang");
+  if (!sel) return;
+  try {
+    sel.value = await invoke("get_target_lang");
+  } catch (e) {}
+}
+
+document.querySelector("#target-lang")?.addEventListener("change", async (e) => {
+  try {
+    await invoke("set_target_lang", { value: e.target.value });
+  } catch (err) {}
+});

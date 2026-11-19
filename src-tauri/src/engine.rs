@@ -53,13 +53,52 @@ impl Default for LocalConfig {
 ///
 /// 之前每次请求都 `Client::builder().build()`，等于每次都重建连接池和 TLS 会话。
 /// 连续翻译时这一项能省几百毫秒——而且客户端本身是可复用的（reqwest 内部线程安全）。
+/// 读取 Windows 系统代理（VPN 客户端通常只写注册表，不设环境变量）。
+/// reqwest 默认只认环境变量，所以浏览器能打开的网站软件却连不上。
+fn system_proxy() -> Option<String> {
+    if let Ok(v) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("https_proxy")) {
+        if !v.trim().is_empty() {
+            return Some(v);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+                "/v",
+                "ProxyServer",
+            ])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(pos) = line.find("REG_SZ") {
+                let v = line[pos + 6..].trim();
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn http() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .expect("HTTP 客户端初始化失败")
+        let mut b = reqwest::Client::builder()
+            // 30 秒足够：正常 1–2 秒就回来；超时基本是网络/代理问题，
+            // 与其让用户对着「翻译中…」干等两分钟，不如早点报错。
+            .timeout(std::time::Duration::from_secs(30));
+        if let Some(p) = system_proxy() {
+            let url = if p.starts_with("http") { p } else { format!("http://{p}") };
+            if let Ok(proxy) = reqwest::Proxy::all(&url) {
+                b = b.proxy(proxy);
+            }
+        }
+        b.build().expect("HTTP 客户端初始化失败")
     })
 }
 
@@ -250,7 +289,9 @@ fn lang_name(target: &str) -> &'static str {
 /// 结果当成功缓存起来，用户就会永远看到"原文"，且这个错误结果再也改不掉。
 fn looks_like_target(s: &str, target: &str) -> bool {
     match target {
-        "en" => s.chars().any(|c| c.is_ascii_alphabetic()),
+        "en" | "fr" | "de" | "es" => s.chars().any(|c| c.is_ascii_alphabetic()),
+        "ko" => s.chars().any(|c| matches!(c as u32, 0xAC00..=0xD7AF | 0x1100..=0x11FF)),
+        "ru" => s.chars().any(|c| matches!(c as u32, 0x0400..=0x04FF)),
         "ja" => s.chars().any(|c| {
             matches!(c as u32, 0x3040..=0x30FF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF)
         }),
@@ -572,17 +613,101 @@ pub fn has_cjk(s: &str) -> bool {
     })
 }
 
-/// 自动判定翻译方向：含中文就翻成英文，否则翻成中文。
+/// 用户选的目标语言（"auto" 表示按内容自动判断）。
 ///
-/// 为什么按"含不含中文"判，而不是按"含不含英文"：
-/// 英文文本里可能夹着中文标点或个别汉字；反过来中文里夹英文单词更常见。
-/// 只要出现中文，用户想看的十有八九是英文译文。
-pub fn auto_target(text: &str) -> &'static str {
-    if has_cjk(text) {
+/// 放在全局静态里是为了少改调用链：翻译入口有七八处，
+/// 都通过 `auto_target()` 取方向，改一处即可全部生效。
+static TARGET_PREF: std::sync::OnceLock<std::sync::RwLock<String>> = std::sync::OnceLock::new();
+
+fn pref_cell() -> &'static std::sync::RwLock<String> {
+    TARGET_PREF.get_or_init(|| std::sync::RwLock::new("auto".to_string()))
+}
+
+/// 设置目标语言偏好（"auto" / "zh-CN" / "en" / "ja" / "ko" / "ru" / "fr" / "de" / "es"）
+pub fn set_target_pref(v: &str) {
+    let v = normalize_lang(v);
+    if let Ok(mut g) = pref_cell().write() {
+        *g = v;
+    }
+}
+
+pub fn target_pref() -> String {
+    pref_cell()
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_else(|_| "auto".to_string())
+}
+
+/// 只接受已知的语言代码，其余一律当 auto（防止设置文件被改坏）
+fn normalize_lang(v: &str) -> String {
+    match v {
+        "zh-CN" | "zh-TW" | "en" | "ja" | "ko" | "ru" | "fr" | "de" | "es" => v.to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+/// 目标是不是中文（只有中文目标才该走本地词典）
+pub fn is_zh_target(target: &str) -> bool {
+    target.starts_with("zh")
+}
+
+/// 按字符区段猜源语言。只做"够用"的判断，不引入语言识别库。
+pub fn detect_source(text: &str) -> &'static str {
+    let (mut han, mut kana, mut hangul, mut cyr, mut latin) = (0, 0, 0, 0, 0);
+    for c in text.chars() {
+        let u = c as u32;
+        match u {
+            0x3040..=0x30FF => kana += 1,
+            0xAC00..=0xD7AF => hangul += 1,
+            0x4E00..=0x9FFF => han += 1,
+            0x0400..=0x04FF => cyr += 1,
+            0x0041..=0x007A => latin += 1,
+            _ => {}
+        }
+    }
+    if kana > 0 {
+        "ja"
+    } else if hangul > 0 {
+        "ko"
+    } else if han > 0 {
+        "zh-CN"
+    } else if cyr > 0 {
+        "ru"
+    } else if latin > 0 {
         "en"
     } else {
-        "zh-CN"
+        "en"
     }
+}
+
+/// 判定翻译方向。
+///
+/// 规则：
+///  1. 用户指定了目标语言 → 用它；但源语言和目标相同时换个方向，
+///     否则"中译中"会退化成原文回显。
+///  2. 用户选"自动" → 源是中文就翻英文；源是英/日/韩/俄 → 翻中文。
+pub fn auto_target(text: &str) -> &'static str {
+    let pref = target_pref();
+    let src = detect_source(text);
+    if pref == "auto" {
+        return if is_zh_target(src) { "en" } else { "zh-CN" };
+    }
+    let pref_static = match pref.as_str() {
+        "zh-CN" => "zh-CN",
+        "zh-TW" => "zh-TW",
+        "en" => "en",
+        "ja" => "ja",
+        "ko" => "ko",
+        "ru" => "ru",
+        "fr" => "fr",
+        "de" => "de",
+        "es" => "es",
+        _ => "zh-CN",
+    };
+    if pref_static == src || (is_zh_target(pref_static) && is_zh_target(src)) {
+        return if is_zh_target(src) { "en" } else { "zh-CN" };
+    }
+    pref_static
 }
 
 // ---------------- 自动拉起本地模型服务 ----------------

@@ -1,5 +1,6 @@
 mod cache;
 mod dict;
+mod glossary;
 pub mod engine;
 mod ocr;
 mod selection;
@@ -220,7 +221,7 @@ async fn translate_single(
     // 这是"轻量化"最关键的一步：以前查单词也走大模型，结果是 1–3 秒 + 词性标错
     // （实测 `among` 被标成 n./v./adj.）。词典查表没有这两个问题。
     // 词典里没有这个词，才交给模型。
-    if target != "en" {
+    if engine::is_zh_target(target) {
         if let Some(e) = dict {
             let senses = dict_entry_to_senses(&e);
             if !senses.is_empty() {
@@ -243,7 +244,7 @@ async fn translate_single(
     }
 
     // ② 词典没有 → 交给模型做"单词释义"（需要词性+多含义的格式）
-    if engine::is_lookup_word(text) && target != "en" && id == "local" {
+    if engine::is_lookup_word(text) && engine::is_zh_target(target) && id == "local" {
         let le = engine::LocalEngine { cfg: cfg.clone() };
         if let Ok(senses) = le.lookup_word(text, target).await {
             if !senses.is_empty() {
@@ -266,6 +267,51 @@ async fn translate_single(
         // 词典模式失败就继续往下走普通翻译，不要在这里报错
     }
 
+    // 标识符快速通道：如果每个子词都在内置术语表里，直接拼结果，**不问模型**。
+    // ctx / buf / idx 这类词在编程语境里含义固定，问模型既慢又容易被"发挥"。
+    if cache::looks_like_identifier(text) && !text.contains(' ') && text.chars().count() >= 3 {
+        let words = split_identifier(text);
+        if words.len() >= 2 && words.len() <= 8 {
+            let mut parts: Vec<engine::CodePart> = Vec::new();
+            let mut all_covered = true;
+            for p in &words {
+                let upper_abbr = p.chars().all(|c| c.is_ascii_uppercase()) && p.chars().count() >= 2;
+                if upper_abbr {
+                    parts.push(engine::CodePart {
+                        raw: p.clone(),
+                        meaning: "缩写（保持原样）".into(),
+                        note: String::new(),
+                    });
+                } else if let Some(m) = glossary::lookup(p) {
+                    parts.push(engine::CodePart {
+                        raw: p.clone(),
+                        meaning: m.to_string(),
+                        note: String::new(),
+                    });
+                } else {
+                    all_covered = false;
+                    break;
+                }
+            }
+            if all_covered && parts.len() >= 2 {
+                let flat = parts
+                    .iter()
+                    .map(|x| format!("{} → {}", x.raw, x.meaning))
+                    .collect::<Vec<_>>()
+                    .join("　");
+                return Ok(engine::Translation {
+                    translated: flat,
+                    source: "glossary".into(),
+                    target: target.to_string(),
+                    cached: false,
+                    hit_count: 0,
+                    parts,
+                    senses: Vec::new(),
+                });
+            }
+        }
+    }
+
     let mut r = engine_translate_once(text, target, id, cfg).await?;
     // 两种情况需要拆词：
     //  ① 引擎原样返回了（不懂这个词）——比较前必须**先清洗标记**。
@@ -282,20 +328,36 @@ async fn translate_single(
             let is_abbr = |p: &String| p.chars().all(|c| c.is_ascii_uppercase()) && p.len() >= 2;
             let need: Vec<String> = words.iter().filter(|p| !is_abbr(p)).cloned().collect();
 
-            // 先试批量翻译（一次往返），失败再逐个翻译
-            let batch = translate_parts_batch(&need, target, id, cfg).await;
+            // ① 先查内置代码术语表：ctx→上下文、buf→缓冲区 这类含义是固定的，
+            //    查表比问模型又快又准，而且完全离线。只有查不到的才交给模型。
             let mut meanings: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            let mut rest: Vec<String> = Vec::new();
+            for p in &need {
+                match glossary::lookup(p) {
+                    Some(m) => {
+                        meanings.insert(p.clone(), m.to_string());
+                    }
+                    None => rest.push(p.clone()),
+                }
+            }
+
+            // ② 剩下的词才问模型（一次批量往返，失败再逐个）
+            let batch = if rest.is_empty() {
+                None
+            } else {
+                translate_parts_batch(&rest, target, id, cfg).await
+            };
             match batch {
                 Some(list) => {
-                    for (w, m) in need.iter().zip(list.iter()) {
+                    for (w, m) in rest.iter().zip(list.iter()) {
                         if engine::is_valid_result(w, m, target) {
                             meanings.insert(w.clone(), m.clone());
                         }
                     }
                 }
                 None => {
-                    for p in &need {
+                    for p in &rest {
                         if let Ok(pr) = engine_translate_once(p, target, id, cfg).await {
                             if engine::is_valid_result(p, &pr.translated, target) {
                                 meanings.insert(p.clone(), pr.translated.trim().to_string());
@@ -440,7 +502,13 @@ fn wordwise_preserve(state: &AppState, text: &str) -> Option<String> {
             w.clear();
             return;
         }
-        match d.lookup(w).and_then(|e| pick_meaning(&e.translation)) {
+        // 词典优先（释义更完整），查不到再看代码术语表（ctx / buf 这类），
+        // 最后都没有就保留原文——不编造。
+        let hit = d
+            .lookup(w)
+            .and_then(|e| pick_meaning(&e.translation))
+            .or_else(|| glossary::lookup(w).map(|m| m.to_string()));
+        match hit {
             Some(meaning) => {
                 out.push_str(&meaning);
                 *hits += 1;
@@ -883,6 +951,50 @@ fn set_translate_enabled(
     Ok(value)
 }
 
+/// 目标语言偏好：auto / zh-CN / en / ja / ko / ru / fr / de / es
+#[tauri::command]
+fn get_target_lang() -> String {
+    engine::target_pref()
+}
+
+#[tauri::command]
+fn set_target_lang(app: tauri::AppHandle, value: String) -> Result<String, String> {
+    engine::set_target_pref(&value);
+    let v = engine::target_pref();
+    if let Ok(store) = app.store(SETTINGS_FILE) {
+        let _ = store.set("target_lang", serde_json::json!(v));
+        let _ = store.save();
+    }
+    Ok(v)
+}
+/// 当前版本号（编译时写入，和 tauri.conf.json 一致）
+#[tauri::command]
+fn get_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// 用系统浏览器打开链接（检查更新 / 看主页）
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("只允许 https 链接".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {e}"))?;
+    }
+    Ok(())
+}
 /// 当前主题：auto / dark / light
 #[tauri::command]
 fn get_theme(app: tauri::AppHandle) -> String {
@@ -1713,7 +1825,7 @@ static POPUP_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None
 /// 词典是 mmap 打开的，这个调用是纯内存操作（微秒级），
 /// 所以可以在拿锁的同一个作用域里同步做完，不会把锁带过 await。
 fn lookup_dict(state: &tauri::State<'_, AppState>, text: &str, target: &str) -> Option<dict::DictEntry> {
-    if target == "en" || !engine::is_lookup_word(text) {
+    if !engine::is_zh_target(target) || !engine::is_lookup_word(text) {
         return None;
     }
     let guard = state.dict.lock().ok()?;
@@ -1939,6 +2051,10 @@ async fn show_translation_popup(
 fn engine_label(id: &str, source: &str) -> (String, String) {
     // 用户选的是本地模型，但结果不是本地模型给的 → 说明回退了。
     // 注意 "dict" 不算回退：那是小模型自己按词典格式给的释义，仍由本地模型产出。
+    // 本地术语表命中的结果，和模型无关，标签要说实话
+    if source == "glossary" {
+        return ("本地术语表（离线）".to_string(), String::new());
+    }
     if id == "local" && !matches!(source, "auto" | "code" | "dict") {
         return (
             "MyMemory（本地模型不可用）".to_string(),
@@ -1983,7 +2099,11 @@ fn translation_allowed(app: &tauri::AppHandle, text: &str) -> bool {
     {
         return false;
     }
-    if engine::has_cjk(text) && !st.cn_ok.load(std::sync::atomic::Ordering::Relaxed) {
+    // 选中中文默认不翻（避免点中中文段落就被弹窗打扰）。
+    // 但目标语言不是中文时（用户在设置里选了 English / 日本語 等），
+    // 说明他就是想把中文译出去 —— 此时不该拦。
+    let cn_source = engine::has_cjk(text) && engine::is_zh_target(engine::auto_target(text));
+    if cn_source && !st.cn_ok.load(std::sync::atomic::Ordering::Relaxed) {
         return false;
     }
     true
@@ -2003,7 +2123,7 @@ fn emit_translation(
     elapsed: std::time::Duration,
 ) {
     let payload = PopupPayload {
-        title: if r.source == "code" {
+        title: if r.source == "code" || r.source == "glossary" {
             text.to_string()
         } else {
             String::new()
@@ -2414,7 +2534,16 @@ pub fn run() {
             // 读取持久化的引擎选择，若无则用默认
             let mut engine_id = DEFAULT_ENGINE.to_string();
             if let Ok(store) = app.store(SETTINGS_FILE) {
-                if let Some(v) = store.get("engine").and_then(|v| v.as_str().map(String::from)) {
+                // 目标语言偏好（默认 auto：按内容判断方向）
+            if let Some(v) = app
+                .store(SETTINGS_FILE)
+                .ok()
+                .and_then(|s| s.get("target_lang").and_then(|v| v.as_str().map(String::from)))
+            {
+                engine::set_target_pref(&v);
+            }
+
+            if let Some(v) = store.get("engine").and_then(|v| v.as_str().map(String::from)) {
                     if engine::exists(&v) {
                         engine_id = v;
                     }
@@ -2888,6 +3017,10 @@ pub fn run() {
             set_translate_enabled,
             get_cn_ok,
             get_auto_popup,
+            get_target_lang,
+            set_target_lang,
+            get_version,
+            open_url,
             get_theme,
             set_theme,
             set_auto_popup,
