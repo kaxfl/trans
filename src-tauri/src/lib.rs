@@ -1593,6 +1593,7 @@ async fn show_popup_toast(app: &tauri::AppHandle, msg: &str, x: i32, y: i32) {
             },
         );
         let _ = popup.show();
+        reclamp_popup_later(app);
     }
 }
 /// 选中中文且「中文也翻译」关着时，给一句明确提示，而不是让快捷键静默无效。
@@ -2017,6 +2018,8 @@ fn emit_translation(
         ..Default::default()
     };
     let _ = app.emit("popup:show", payload);
+    // 结果比「翻译中」高得多，重新夹一次，避免底部溢出屏幕
+    reclamp_popup_later(app);
 }
 
 /// 显示"翻译中"占位。返回是否真的显示了（用于避免重复定位）。
@@ -2178,6 +2181,7 @@ async fn show_popup_loading(
             },
         );
         let _ = popup.show();
+        reclamp_popup_later(app);
     }
 }
 
@@ -2196,10 +2200,63 @@ async fn show_popup_error(app: &tauri::AppHandle, msg: &str, x: i32, y: i32) {
             },
         );
         let _ = popup.show();
+        reclamp_popup_later(app);
     }
 }
 
-// 计算弹窗位置：放到选区下方，放不下就到上方，夹在屏幕内。
+// 把弹窗夹回屏幕内。关键点：用窗口**当前真实尺寸**，而不是常量——
+// 弹窗会随内容自适应高度（长段落能到几百像素），按常量算就会以为放得下，
+// 结果下边缘被屏幕裁掉。这就是"底部文字划词时浮窗出屏"的原因。
+fn clamp_popup_to_screen(app: &tauri::AppHandle) {
+    let Some(p) = app.get_webview_window("popup") else {
+        return;
+    };
+    let (Ok(pos), Ok(size)) = (p.outer_position(), p.outer_size()) else {
+        return;
+    };
+    let mon = p
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let Some(mon) = mon else { return };
+    let mp = mon.position();
+    let ms = mon.size();
+    let (mx, my) = (mp.x, mp.y);
+    let (mw, mh) = (ms.width as i32, ms.height as i32);
+    let (w, h) = (size.width as i32, size.height as i32);
+    let margin = 8;
+
+    let mut nx = pos.x;
+    let mut ny = pos.y;
+    if nx + w > mx + mw - margin {
+        nx = mx + mw - w - margin;
+    }
+    if ny + h > my + mh - margin {
+        ny = my + mh - h - margin;
+    }
+    nx = nx.max(mx + margin);
+    ny = ny.max(my + margin);
+
+    if (nx, ny) != (pos.x, pos.y) {
+        // 先隐藏再移动：WebView2 在"已显示的窗口被挪动"时可能不重绘，
+        // 表现是弹窗变半透明、能看见底下的网页。hide → move → show 强制整窗重绘。
+        let _ = p.hide();
+        let _ = p.set_position(tauri::PhysicalPosition::new(nx, ny));
+        let _ = p.show();
+    }
+}
+
+/// 延迟一点再夹一次：前端 autoFit 改完尺寸后，才拿得到真实高度。
+pub(crate) fn reclamp_popup_later(app: &tauri::AppHandle) {
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+        clamp_popup_to_screen(&h);
+    });
+}
+
+// 计算弹窗位置：优先选区下方，放不下就到上方，再放不下就贴底——始终保证完整可见。
 async fn popup_pos(app: &tauri::AppHandle, x: i32, y: i32, _sel_w: i32, sel_h: i32) -> (i32, i32) {
     let (sw, sh) = match app.primary_monitor() {
         Ok(Some(m)) => {
@@ -2208,20 +2265,32 @@ async fn popup_pos(app: &tauri::AppHandle, x: i32, y: i32, _sel_w: i32, sel_h: i
         }
         _ => (1920, 1080),
     };
-    let (pw, ph) = (POPUP_W as i32, POPUP_H as i32);
+    // 有真实尺寸就用真实尺寸，没显示过才退回常量
+    let (pw, ph) = match app.get_webview_window("popup").and_then(|p| p.outer_size().ok()) {
+        Some(s) if s.width > 0 && s.height > 0 => (s.width as i32, s.height as i32),
+        _ => (POPUP_W as i32, POPUP_H as i32),
+    };
+    let margin = 8;
     let mut px = x;
-    let mut py = y + sel_h.max(20) + 8;
-    if py + ph > sh {
-        py = y - ph - 8;
+    let mut py = y + sel_h.max(20) + margin;
+
+    // ① 下方放不下 → 挪到选区上方
+    if py + ph + margin > sh {
+        py = y - ph - margin;
     }
-    if px + pw > sw {
-        px = sw - pw - 8;
+    // ② 上方也放不下（选区在屏幕中间且内容很长）→ 贴底
+    if py + ph + margin > sh {
+        py = sh - ph - margin;
+    }
+    // ③ 实在比屏幕还高 → 贴顶，优先露出标题
+    if py < 0 {
+        py = margin;
+    }
+    if px + pw + margin > sw {
+        px = sw - pw - margin;
     }
     if px < 0 {
-        px = 0;
-    }
-    if py < 0 {
-        py = 0;
+        px = margin;
     }
     (px, py)
 }
