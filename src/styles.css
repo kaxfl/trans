@@ -538,3 +538,76 @@ body {
   gap: 8px;
 }
 
+
+/* ---------------- 顶栏紧凑下拉（方向 / 翻译源） ---------------- */
+
+/* 顶栏改两行：第一行标题+按钮，第二行两个下拉各占一半 */
+.header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+
+.hdr-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 用 grid 而不是 flex：flex 下 select 的 width:100% 会把行撑成 200% */
+.hdr-selects {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.hdr-selects > select {
+  width: 100%;
+  min-width: 0;
+}
+
+.select.compact {
+  height: 27px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 7px;
+  max-width: none;
+}
+
+.hdr-actions {
+  gap: 4px;
+}
+/* ---------------- 宽度硬约束 ----------------
+   窗口只有 460px 宽，任何一处"最小内容宽度"超出都会把整页撑宽，
+   表现为右侧按钮被切掉。这里统一收口。 */
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.app {
+  width: 100%;
+  max-width: 100vw;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.header,
+.hdr-top,
+.hdr-selects,
+.panel,
+.action-row,
+.main-view,
+#settings {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.hdr-selects > select,
+.select {
+  min-width: 0;
+}

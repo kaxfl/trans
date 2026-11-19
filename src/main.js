@@ -268,6 +268,8 @@ enabledToggleEl.addEventListener("click", async () => {
     loadTargetLang();
     refreshCacheToggle();
     refreshBaidu();
+    loadQuickEngine();
+    loadDirection();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -290,6 +292,8 @@ cnToggleEl.addEventListener("click", async () => {
     loadTargetLang();
     refreshCacheToggle();
     refreshBaidu();
+    loadQuickEngine();
+    loadDirection();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -534,6 +538,8 @@ refreshSwitches();
     loadTargetLang();
     refreshCacheToggle();
     refreshBaidu();
+    loadQuickEngine();
+    loadDirection();
 refreshHotkeyStatus();
 
 // ---- 关于：版本号 + 检查更新 ----
@@ -609,3 +615,61 @@ document.querySelector("#baidu-save")?.addEventListener("click", async () => {
     if (st) st.textContent = "保存失败：" + e;
   }
 });
+
+// ---- 顶栏：翻译方向 + 翻译源 ----
+const quickEngineEl = document.querySelector("#engine-quick");
+
+function syncDirection(value) {
+  if (dirEl && dirEl.value !== value) dirEl.value = value;
+  const tl = document.querySelector("#target-lang");
+  if (tl && tl.value !== value) tl.value = value;
+}
+
+async function loadQuickEngine() {
+  if (!quickEngineEl) return;
+  try {
+    const engines = await invoke("list_engines");
+    quickEngineEl.innerHTML = "";
+    for (const e of engines) {
+      const opt = document.createElement("option");
+      opt.value = e.id;
+      opt.textContent = e.label.replace(/\s*[（(].*?[)）]\s*/g, "").trim();
+      quickEngineEl.appendChild(opt);
+    }
+    const cur = await invoke("get_engine");
+    if (cur) quickEngineEl.value = cur;
+  } catch (e) {}
+}
+
+quickEngineEl?.addEventListener("change", async () => {
+  const id = quickEngineEl.value;
+  try {
+    await invoke("set_engine", { id });
+    if (engineEl) engineEl.value = id;
+    statusEl.textContent = `翻译源：${quickEngineEl.selectedOptions[0].textContent}`;
+  } catch (e) {
+    statusEl.textContent = "切换翻译源失败：" + e;
+  }
+});
+
+// 方向：顶栏和设置页共用同一个 target_lang
+dirEl?.addEventListener("change", async () => {
+  syncDirection(dirEl.value);
+  try {
+    await invoke("set_target_lang", { value: dirEl.value });
+  } catch (e) {}
+});
+
+document.querySelector("#target-lang")?.addEventListener("change", async (e) => {
+  syncDirection(e.target.value);
+  try {
+    await invoke("set_target_lang", { value: e.target.value });
+  } catch (err) {}
+});
+
+async function loadDirection() {
+  try {
+    const v = await invoke("get_target_lang");
+    syncDirection(v || "auto");
+  } catch (e) {}
+}
