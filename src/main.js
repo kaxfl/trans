@@ -37,7 +37,7 @@ async function doTranslate(text) {
     // 方向以"后端实际用的 target"为准：选了自动时，前端自己猜不准
     const dir = res.target === "en" ? "中译英" : "英译中";
     statusEl.textContent = `完成（${res.source} → ${dir}）`;
-    srcLangEl.textContent = `检测到 ${res.source}`;
+    srcLangEl.textContent = dir;
   } catch (e) {
     statusEl.classList.remove("busy");
     resultEl.value = "";
@@ -489,7 +489,7 @@ listen("box:result", (event) => {
   } else {
     const dir2 = r.target === "en" ? "中译英" : "英译中";
     statusEl.textContent = r.source ? `框选完成（${r.source} → ${dir2}）` : "框选完成";
-    srcLangEl.textContent = r.source ? `检测到 ${r.source}` : "";
+    srcLangEl.textContent = r.target === "en" ? "中译英" : "外语→中文";
   }
 });
 
@@ -627,18 +627,39 @@ function syncDirection(value) {
 
 async function loadQuickEngine() {
   if (!quickEngineEl) return;
+  let engines = [];
   try {
-    const engines = await invoke("list_engines");
-    quickEngineEl.innerHTML = "";
-    for (const e of engines) {
-      const opt = document.createElement("option");
-      opt.value = e.id;
-      opt.textContent = e.label.replace(/\s*[（(].*?[)）]\s*/g, "").trim();
-      quickEngineEl.appendChild(opt);
-    }
-    const cur = await invoke("get_engine");
-    if (cur) quickEngineEl.value = cur;
+    engines = await invoke("list_engines");
+  } catch (e) {
+    engines = [];
+  }
+  if (!Array.isArray(engines) || engines.length === 0) {
+    engines = [
+      { id: "baidu", label: "百度翻译" },
+      { id: "local", label: "本地模型" },
+      { id: "deepseek", label: "DeepSeek" },
+      { id: "dict", label: "本地词典" },
+      { id: "mymemory", label: "MyMemory" },
+    ];
+  }
+  quickEngineEl.innerHTML = "";
+  for (const e of engines) {
+    const opt = document.createElement("option");
+    opt.value = e.id;
+    opt.textContent =
+      String(e.label || e.id).replace(/\s*[（(].*?[)）]\s*/g, "").trim() || e.id;
+    quickEngineEl.appendChild(opt);
+  }
+  // 必须有选中项，否则下拉框显示成空白
+  let cur = "";
+  try {
+    cur = await invoke("get_engine");
   } catch (e) {}
+  if (cur && engines.some((e) => e.id === cur)) {
+    quickEngineEl.value = cur;
+  } else if (quickEngineEl.options.length > 0) {
+    quickEngineEl.selectedIndex = 0;
+  }
 }
 
 quickEngineEl?.addEventListener("change", async () => {
