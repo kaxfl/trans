@@ -1026,6 +1026,49 @@ async fn start_box(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 框选截图翻译：OCR 之后**直接在选区旁边弹窗**显示译文，不再回填主窗口。
+///
+/// 坐标是物理像素（box.js 里已经乘过 devicePixelRatio）。
+/// 这样用起来和"划词翻译"是同一套体验：选中哪块，译文就出现在哪块旁边。
+#[tauri::command]
+async fn ocr_box_translate(
+    app: tauri::AppHandle,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Result<(), String> {
+    // 先收起遮罩，否则它会一直盖在弹窗上面
+    if let Some(w) = app.get_webview_window("box") {
+        let _ = w.close();
+    }
+    let text = tauri::async_runtime::spawn_blocking(move || ocr::recognize(x, y, width, height))
+        .await
+        .map_err(|e| format!("OCR 线程失败: {e}"))??;
+    let t = text.trim().to_string();
+    if t.is_empty() {
+        show_popup_toast(&app, "框选区域里没有识别到文字", x, y).await;
+        return Ok(());
+    }
+    // 开关没开时给一句明确提示，别让用户对着屏幕发呆。
+    // （划词那条路径是"不弹窗"，但框选是用户主动操作的，必须回话。）
+    if !translation_allowed(&app, &t) {
+        let cn_ok = app
+            .state::<AppState>()
+            .cn_ok
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let msg = if cn_ok {
+            "划词翻译已关闭（Ctrl+Alt+Z 可重新开启）"
+        } else {
+            "识别到的是中文 —— 在设置里打开「中文也翻译」"
+        };
+        show_popup_toast(&app, msg, x, y).await;
+        return Ok(());
+    }
+    show_translation_popup(&app, &t, x, y, width, height).await;
+    Ok(())
+}
+
 /// 框选完成：发结果给主窗口并关掉遮罩
 #[tauri::command]
 async fn box_done(
@@ -2743,6 +2786,7 @@ pub fn run() {
             get_engine,
             set_engine,
             ocr_region,
+            ocr_box_translate,
             start_box,
             box_done,
             box_cancel,

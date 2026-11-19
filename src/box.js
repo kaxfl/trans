@@ -33,17 +33,19 @@ document.addEventListener("mouseup", async (e) => {
     await invoke("box_cancel");
     return;
   }
+  // 遮罩先隐身，避免和马上弹出的译文窗口抢画面
+  sel.style.display = "none";
   try {
     // CSS 像素 → 物理像素（主显示器原点在 (0,0)）
-    const text = await invoke("ocr_region", {
+    // 后端会：关遮罩 → OCR → 在选区旁边直接弹译文
+    await invoke("ocr_box_translate", {
       x: Math.round(x * dpr),
       y: Math.round(y * dpr),
       width: Math.round(w * dpr),
       height: Math.round(h * dpr),
     });
-    const res = await invoke("translate", { text, target: "zh-CN" });
-    await invoke("box_done", { translated: res.translated, source: res.source, raw: text });
   } catch (err) {
+    // 出错的兜底：仍然把信息送到主窗口，避免"框完毫无反应"
     await invoke("box_done", { translated: "", source: "", raw: "", error: String(err) });
   }
 });
