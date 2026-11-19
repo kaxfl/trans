@@ -3041,6 +3041,14 @@ pub fn run() {
                 .inner_size(POPUP_W, POPUP_H)
                 .build();
 
+            // 复位 WebView 缩放：WebView2 会把 Ctrl+滚轮的缩放持久化，
+            // 缩放后 460px 的内容会超出窗口，右侧按钮被裁掉。
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_zoom(1.0);
+            }
+            if let Some(w) = app.get_webview_window("popup") {
+                let _ = w.set_zoom(1.0);
+            }
             // 【调试钩子】设了 JFY_DEBUG_POPUP=1 时，启动 3 秒后自动在屏幕中部
             // 弹一个真实翻译弹窗。用途：无鼠标操作也能截图核对弹窗样式。
             // 不设这个环境变量时完全不影响正常运行。

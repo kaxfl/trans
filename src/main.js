@@ -617,7 +617,7 @@ document.querySelector("#baidu-save")?.addEventListener("click", async () => {
 });
 
 // ---- 顶栏：翻译方向 + 翻译源 ----
-const quickEngineEl = document.querySelector("#engine-quick");
+
 
 function syncDirection(value) {
   if (dirEl && dirEl.value !== value) dirEl.value = value;
@@ -626,6 +626,7 @@ function syncDirection(value) {
 }
 
 async function loadQuickEngine() {
+  const quickEngineEl = document.querySelector("#engine-quick");
   if (!quickEngineEl) return;
   let engines = [];
   try {
@@ -662,7 +663,8 @@ async function loadQuickEngine() {
   }
 }
 
-quickEngineEl?.addEventListener("change", async () => {
+document.querySelector("#engine-quick")?.addEventListener("change", async (ev) => {
+  const quickEngineEl = ev.target;
   const id = quickEngineEl.value;
   try {
     await invoke("set_engine", { id });
