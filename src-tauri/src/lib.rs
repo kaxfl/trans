@@ -627,6 +627,27 @@ async fn translate_with_fallback(
     cfg: &engine::LocalConfig,
     dict_hit: Option<dict::DictEntry>,
 ) -> Result<engine::Translation, String> {
+    // 用户明确选了「本地词典」：只查词，查不到就说清楚，不去联网。
+    if id == "dict" {
+        if let Some(e) = dict_hit {
+            let senses = dict_entry_to_senses(&e);
+            let flat = senses
+                .iter()
+                .flat_map(|s| s.meanings.iter().cloned())
+                .collect::<Vec<_>>()
+                .join("；");
+            return Ok(engine::Translation {
+                translated: flat,
+                source: "dict".into(),
+                target: target.to_string(),
+                cached: false,
+                hit_count: 0,
+                parts: Vec::new(),
+                senses,
+            });
+        }
+        return Err("本地词典只收录单词（56 万条）；句子请换成「本地模型」或「DeepSeek 云端」".into());
+    }
     // 分段上限按引擎区分。
     //
     // 400 是 MyMemory 时代的限制（那个免费接口单次只接受 ~500 字符）。

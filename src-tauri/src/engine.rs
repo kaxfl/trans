@@ -54,7 +54,6 @@ impl Default for LocalConfig {
 /// 之前每次请求都 `Client::builder().build()`，等于每次都重建连接池和 TLS 会话。
 /// 连续翻译时这一项能省几百毫秒——而且客户端本身是可复用的（reqwest 内部线程安全）。
 /// 读取 Windows 系统代理（VPN 客户端通常只写注册表，不设环境变量）。
-/// reqwest 默认只认环境变量，所以浏览器能打开的网站软件却连不上。
 fn system_proxy() -> Option<String> {
     if let Ok(v) = std::env::var("HTTPS_PROXY").or_else(|_| std::env::var("https_proxy")) {
         if !v.trim().is_empty() {
@@ -85,21 +84,39 @@ fn system_proxy() -> Option<String> {
     None
 }
 
+/// 直连客户端。
+///
+/// 为什么不默认挂代理：VPN 开 TUN 模式时直连本来就通，硬塞一个代理反而可能
+/// 把能用的路径弄挂（实测出现过请求一直挂着）。代理只在直连失败时兜底。
 fn http() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
-        let mut b = reqwest::Client::builder()
-            // 30 秒足够：正常 1–2 秒就回来；超时基本是网络/代理问题，
-            // 与其让用户对着「翻译中…」干等两分钟，不如早点报错。
-            .timeout(std::time::Duration::from_secs(30));
-        if let Some(p) = system_proxy() {
-            let url = if p.starts_with("http") { p } else { format!("http://{p}") };
-            if let Ok(proxy) = reqwest::Proxy::all(&url) {
-                b = b.proxy(proxy);
-            }
-        }
-        b.build().expect("HTTP 客户端初始化失败")
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .expect("HTTP 客户端初始化失败")
     })
+}
+
+/// 走系统代理的客户端（只在直连失败后用一次）。
+fn http_proxied() -> Option<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<Option<reqwest::Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            let p = system_proxy()?;
+            let url = if p.starts_with("http") {
+                p
+            } else {
+                format!("http://{p}")
+            };
+            let proxy = reqwest::Proxy::all(&url).ok()?;
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(20))
+                .proxy(proxy)
+                .build()
+                .ok()
+        })
+        .as_ref()
 }
 
 /// 标识符拆出来的一个子词：原文 + 译文 + 可选的简短说明（词性/注释）。
@@ -203,6 +220,55 @@ v.|划船；乘船
 /// 整段截掉，于是译文变成空串 → 被判为翻译失败 → 回退 MyMemory，
 /// 表现出来就是"本地模型对单词和短句完全不可用"。
 /// 所以这里对孤立的标记一律只做**删除**，绝不截断正文。
+/// 去掉模型输出的开场白（提示词残留）。
+///
+/// 本地小模型经常把指令复述一遍：`翻译成简体中文：<正文>`。
+/// 只处理开头，正文里出现同样的字眼不动。
+pub fn strip_preamble(s: &str) -> String {
+    const MARKERS: [&str; 14] = [
+        "翻译成简体中文",
+        "翻译成中文",
+        "翻译为中文",
+        "翻译成英文",
+        "中文翻译",
+        "简体中文",
+        "以下是翻译",
+        "下面是翻译",
+        "以下是译文",
+        "译文",
+        "翻译",
+        "translation",
+        "here is the translation",
+        "translated text",
+    ];
+
+    let mut out = s.trim_start().to_string();
+    let mut guard = 0;
+    loop {
+        guard += 1;
+        if guard > 8 {
+            break;
+        }
+        let lower = out.to_lowercase();
+        let mut cut = 0usize;
+        for m in MARKERS {
+            if lower.starts_with(m) {
+                let rest = &out[m.len()..];
+                let trimmed = rest.trim_start_matches([':', '：', ' ', '\t']);
+                if trimmed.len() < rest.len() {
+                    cut = out.len() - trimmed.len();
+                    break;
+                }
+            }
+        }
+        if cut == 0 {
+            break;
+        }
+        out = out[cut..].trim_start().to_string();
+    }
+    out
+}
+
 pub fn strip_thinking(s: &str) -> String {
     /// 把 `from` 位置起、标记自身连同前面紧邻的空白一起删掉。
     fn erase_at(out: &mut String, from: usize, len: usize) {
@@ -235,6 +301,9 @@ pub fn strip_thinking(s: &str) -> String {
             out.replace_range(i..i + open.len() + j + close.len(), "");
         }
     }
+
+    // ③ 去掉模型开场白（"翻译成简体中文：..." 这类提示词残留）
+    out = strip_preamble(&out);
 
     // ② 再删掉孤立的标记。
     //
@@ -1012,21 +1081,44 @@ impl Translator for DeepSeekEngine {
             ]
         });
 
-        let resp = http()
-            .post("https://api.deepseek.com/chat/completions")
-            .bearer_auth(key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    "DeepSeek 请求超时（>120s），检查网络或稍后重试".to_string()
-                } else if e.is_connect() {
-                    "连不上 api.deepseek.com，请检查网络/代理".to_string()
-                } else {
-                    format!("DeepSeek 请求失败: {e}")
+        // 直连优先；连不上就试一次系统代理（VPN 只开"系统代理"时走这条）。
+        async fn try_send(
+            client: &reqwest::Client,
+            key: &str,
+            body: &serde_json::Value,
+        ) -> Result<reqwest::Response, String> {
+            client
+                .post("https://api.deepseek.com/chat/completions")
+                .bearer_auth(key)
+                .json(body)
+                .send()
+                .await
+                .map_err(|e| format!("{e}"))
+        }
+
+        let resp = match try_send(http(), key, &body).await {
+            Ok(r) => r,
+            Err(first) => match http_proxied() {
+                Some(c) => match try_send(c, key, &body).await {
+                    Ok(r) => {
+                        eprintln!("[网络] 直连失败，已改用系统代理");
+                        r
+                    }
+                    Err(second) => {
+                        return Err(format!(
+                            "连不上 api.deepseek.com（直连与代理均失败）：{first} / {second}；\
+                             检查网络，或把 VPN 切到 TUN/全局模式"
+                        ))
+                    }
+                },
+                None => {
+                    return Err(format!(
+                        "连不上 api.deepseek.com：{first}；\n\
+                         没检测到系统代理。把 VPN 切到 TUN/全局模式，或申请后改用本地模型"
+                    ))
                 }
-            })?;
+            },
+        };
 
         let status = resp.status();
         if !status.is_success() {
@@ -1088,6 +1180,7 @@ pub fn get(id: &str, cfg: &LocalConfig) -> Option<Box<dyn Translator>> {
 /// 引擎清单：(id, 显示名, 是否推荐默认)
 pub fn list() -> Vec<(&'static str, &'static str, bool)> {
     vec![
+        ("dict", "本地词典 (离线·仅单词)", true),
         ("local", "本地模型 (OpenAI 兼容)", true),
         ("deepseek", "DeepSeek 云端 (需 API Key)", false),
         ("mymemory", "MyMemory (免费/国内可用)", false),
@@ -1097,7 +1190,7 @@ pub fn list() -> Vec<(&'static str, &'static str, bool)> {
 
 /// 引擎 id 是否合法
 pub fn exists(id: &str) -> bool {
-    matches!(id, "local" | "deepseek" | "mymemory" | "google")
+    matches!(id, "dict" | "local" | "deepseek" | "mymemory" | "google")
 }
 
 #[cfg(test)]
@@ -1187,5 +1280,25 @@ mod tests {
             tcp_ready(&host, port, 800),
             "自动启动失败：11434 仍不可达"
         );
+    }
+}
+
+#[cfg(test)]
+mod preamble_tests {
+    use super::strip_preamble;
+
+    #[test]
+    fn strips_model_smalltalk() {
+        assert_eq!(strip_preamble("翻译成简体中文：这是一段译文。"), "这是一段译文。");
+        assert_eq!(strip_preamble("以下是翻译：\n\n这是一段译文。"), "这是一段译文。");
+        assert_eq!(strip_preamble("Translation: This is a sentence."), "This is a sentence.");
+        assert_eq!(strip_preamble("简体中文：内容"), "内容");
+    }
+
+    #[test]
+    fn keeps_normal_text() {
+        // 正文里出现"翻译"但不带冒号 → 不动
+        assert_eq!(strip_preamble("翻译是一门古老的手艺。"), "翻译是一门古老的手艺。");
+        assert_eq!(strip_preamble("这是普通译文。"), "这是普通译文。");
     }
 }
