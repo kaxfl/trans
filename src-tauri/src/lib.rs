@@ -480,20 +480,42 @@ fn pick_meaning(translation: &str) -> Option<String> {
 /// 实测把 `Shop` 翻成"刘草的人"、`map` 翻成"场"——比不翻还糟。
 /// 判到代码就直接走标识符级翻译，压根不给模型发挥的机会。
 fn looks_like_code(text: &str) -> bool {
-    if text.chars().count() > 4000 {
+    let t = text.trim();
+    let n = t.chars().count();
+    if n < 3 || n > 4000 {
         return false;
     }
-    let lines = text.lines().count().max(1) as f64;
-    let syms = text
+
+    // ① 强信号：这些组合在英文散文里基本不会出现
+    const TOKENS: [&str; 14] = [
+        "->", "::", "=>", "==", "!=", "++", "--", "&&", "||", "{", "}", "();", ");", "#include",
+    ];
+    if TOKENS.iter().any(|s| t.contains(s)) {
+        return true;
+    }
+
+    // ② 分号 / 等号密度：HOI4 脚本每行形如 `key = value`，
+    //    正常英文段落里 `=` 和 `;` 极少。
+    let semi = t.matches(';').count();
+    let eq = t.matches('=').count();
+    let lines = t.lines().count().max(1) as f64;
+    if semi >= 1 {
+        return true;
+    }
+    if eq >= 2 && (eq as f64 / lines) >= 0.8 {
+        return true;
+    }
+
+    // ③ 符号占比：散文里标点占比通常 <5%，代码里 `(){}[]=<>*&|` 往往 >12%
+    let weird = t
         .chars()
-        .filter(|c| matches!(c, '{' | '}' | '(' | ')' | '[' | ']' | ';' | '=' | '<' | '>' | '*' | '&' | '|'))
-        .count() as f64;
-    let arrows = text.matches("->").count()
-        + text.matches("::").count()
-        + text.matches("&&").count()
-        + text.matches("==").count()
-        + text.matches("++").count();
-    arrows >= 1 || (syms / lines) >= 3.0
+        .filter(|c| {
+            !c.is_alphanumeric()
+                && !c.is_whitespace()
+                && !",.'\"!?-:…—·、。，；：！？“”‘’（）《》".contains(*c)
+        })
+        .count();
+    (weird as f64 / n as f64) > 0.12
 }
 
 /// 代码优先：识别成代码就走逐词/标识符翻译，否则交给正常翻译链。
@@ -3167,5 +3189,32 @@ mod code_fallback_tests {
             }
         }
         assert_eq!(rebuilt, text);
+    }
+}
+
+#[cfg(test)]
+mod code_detect_tests {
+    use super::looks_like_code;
+
+    #[test]
+    fn prose_is_not_code() {
+        // 正常英文段落：括号、引号、破折号都有，但绝不能被当成代码
+        let prose = "Discussions of the theory and practice of translation reach back into antiquity \
+and show remarkable continuities. The ancient Greeks distinguished between 'metaphrasis' \
+(a literal translation) and 'hermeneia' (a translation with interpretation).";
+        assert!(!looks_like_code(prose), "英文段落被误判成代码");
+
+        let prose2 = "This distinction was adopted by English poet and translator John Dryden (1631-1700), \
+who described translation as the judicious blending of these two modes.";
+        assert!(!looks_like_code(prose2), "第二段也被误判");
+    }
+
+    #[test]
+    fn code_is_code() {
+        assert!(looks_like_code("shop->setPos(520, 45);"));
+        assert!(looks_like_code("scene->addItem(shop);"));
+        assert!(looks_like_code("has_completed_focus = JAP_advance_one_hundred_million_fireballs"));
+        assert!(looks_like_code("if (type < 40) {\n    zombie = new BasicZombie;\n}"));
+        assert!(looks_like_code("void MainWindow::onTimer()"));
     }
 }
