@@ -38,6 +38,8 @@ struct AppState {
     translate_enabled: std::sync::atomic::AtomicBool,
     /// 是否也翻译中文。默认 **false**：选中中文不弹窗，避免点中文字段就被翻译
     cn_ok: std::sync::atomic::AtomicBool,
+    /// 是否使用本地翻译缓存。默认 **true**；关掉后每次都重新请求，方便"翻错了重刷"
+    cache_on: std::sync::atomic::AtomicBool,
     /// 选中后是否**自动**弹窗。关掉后划词不再自动弹，但 Ctrl+Alt+. 仍可手动翻译
     auto_popup: std::sync::atomic::AtomicBool,
     /// 本地词典（mmap 打开的 35 MB 词典文件；没配或打不开时为 None）
@@ -190,7 +192,7 @@ fn dict_entry_to_senses(e: &dict::DictEntry) -> Vec<engine::Sense> {
             .split(['；', ',', '，', ';'])
             .map(|m| m.trim().to_string())
             .filter(|m| !m.is_empty())
-            .take(6)
+            .take(8)
             .collect();
         if meanings.is_empty() {
             continue;
@@ -198,11 +200,11 @@ fn dict_entry_to_senses(e: &dict::DictEntry) -> Vec<engine::Sense> {
         // 同一个词性合并到一条
         if let Some(existing) = out.iter_mut().find(|s| s.pos == pos) {
             existing.meanings.extend(meanings);
-            existing.meanings.truncate(6);
+            existing.meanings.truncate(8);
         } else {
             out.push(engine::Sense { pos, meanings });
         }
-        if out.len() >= 6 {
+        if out.len() >= 8 {
             break;
         }
     }
@@ -703,7 +705,11 @@ async fn translate(
 
     // ① 查缓存：命中就 0 延迟返回（本地模型推理慢，这一步最关键）。
     //    只对短文本用缓存，避免长文改动一个词就读到旧结果。
-    let cacheable = text.chars().count() <= 500;
+    // 关掉缓存开关时，读写都不做（相当于每次都重新请求）
+    let cache_on = state
+        .cache_on
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let cacheable = cache_on && text.chars().count() <= 500;
     if cacheable {
         let mut c = state.cache.lock().unwrap();
         if let Some(e) = c.get(&text, &target) {
@@ -1008,6 +1014,27 @@ fn set_translate_enabled(
     Ok(value)
 }
 
+/// 是否启用本地翻译缓存（关掉后每次都重新请求，方便"翻错了重刷"）
+#[tauri::command]
+fn get_cache_on(state: tauri::State<'_, AppState>) -> bool {
+    state.cache_on.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn set_cache_on(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    value: bool,
+) -> bool {
+    state
+        .cache_on
+        .store(value, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(store) = app.store(SETTINGS_FILE) {
+        let _ = store.set("cache_on", serde_json::json!(value));
+        let _ = store.save();
+    }
+    value
+}
 /// 目标语言偏好：auto / zh-CN / en / ja / ko / ru / fr / de / es
 #[tauri::command]
 fn get_target_lang() -> String {
@@ -2011,7 +2038,7 @@ async fn show_translation_popup(
         let cfg = state.local_cfg.lock().unwrap().clone();
         // 单个单词先查本地词典（毫秒级），查得到就不用启动模型
         let hit = lookup_dict(&state, text, target);
-        (id, cfg, text.chars().count() <= 500, hit)
+        (id, cfg, state.cache_on.load(std::sync::atomic::Ordering::Relaxed) && text.chars().count() <= 500, hit)
     };
 
     // ① 命中本地缓存 → 秒出
@@ -2227,7 +2254,7 @@ pub(crate) async fn translate_and_emit(app: &tauri::AppHandle, text: &str) {
         let cfg = state.local_cfg.lock().unwrap().clone();
         // 单个单词先查本地词典，查得到就完全不碰模型（这才是"轻量"的关键）
         let hit = lookup_dict(&state, text, target);
-        (id, cfg, text.chars().count() <= 500, hit)
+        (id, cfg, state.cache_on.load(std::sync::atomic::Ordering::Relaxed) && text.chars().count() <= 500, hit)
     };
 
     // ① 缓存命中 → 直接出，不再动引擎
@@ -2667,6 +2694,12 @@ pub fn run() {
                 .ok()
                 .and_then(|s| s.get("cn_to_en").and_then(|v| v.as_bool()))
                 .unwrap_or(false);
+            // 是否使用本地翻译缓存：默认开。关掉后每次都重新请求，方便"翻错了重刷"
+            let cache_on_setting = app
+                .store(SETTINGS_FILE)
+                .ok()
+                .and_then(|s| s.get("cache_on").and_then(|v| v.as_bool()))
+                .unwrap_or(true);
             // 选中即翻译（默认）还是"鼠标移回选区才翻译"
             let require_hover = app
                 .store(SETTINGS_FILE)
@@ -2757,6 +2790,7 @@ pub fn run() {
                 monitor_paused: std::sync::atomic::AtomicBool::new(!copy_translate),
                 translate_enabled: std::sync::atomic::AtomicBool::new(translate_enabled),
                 cn_ok: std::sync::atomic::AtomicBool::new(cn_ok),
+                cache_on: std::sync::atomic::AtomicBool::new(cache_on_setting),
                 auto_popup: std::sync::atomic::AtomicBool::new(auto_popup),
                 dict: Mutex::new(dict),
             });
@@ -3074,6 +3108,8 @@ pub fn run() {
             set_translate_enabled,
             get_cn_ok,
             get_auto_popup,
+            get_cache_on,
+            set_cache_on,
             get_target_lang,
             set_target_lang,
             get_version,

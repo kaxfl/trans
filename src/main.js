@@ -266,6 +266,7 @@ enabledToggleEl.addEventListener("click", async () => {
     loadTheme();
     loadVersion();
     loadTargetLang();
+    refreshCacheToggle();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -286,6 +287,7 @@ cnToggleEl.addEventListener("click", async () => {
     loadTheme();
     loadVersion();
     loadTargetLang();
+    refreshCacheToggle();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -528,6 +530,7 @@ refreshSwitches();
     loadTheme();
     loadVersion();
     loadTargetLang();
+    refreshCacheToggle();
 refreshHotkeyStatus();
 
 // ---- 关于：版本号 + 检查更新 ----
@@ -560,4 +563,25 @@ document.querySelector("#target-lang")?.addEventListener("change", async (e) => 
   try {
     await invoke("set_target_lang", { value: e.target.value });
   } catch (err) {}
+});
+
+// ---- 本地缓存开关 ----
+async function refreshCacheToggle() {
+  const btn = document.querySelector("#cache-toggle");
+  if (!btn) return;
+  try {
+    const on = await invoke("get_cache_on");
+    btn.classList.toggle("on", on);
+    btn.textContent = on ? "本地缓存：开启" : "本地缓存：关闭";
+  } catch (e) {}
+}
+
+document.querySelector("#cache-toggle")?.addEventListener("click", async () => {
+  const btn = document.querySelector("#cache-toggle");
+  const cur = btn.classList.contains("on");
+  try {
+    const next = await invoke("set_cache_on", { value: !cur });
+    btn.classList.toggle("on", next);
+    btn.textContent = next ? "本地缓存：开启" : "本地缓存：关闭";
+  } catch (e) {}
 });
