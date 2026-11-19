@@ -229,6 +229,17 @@
           <p class="hint">按此组合随时唤出主窗口。<strong>当前默认：Alt + Enter</strong></p>
         
         <section class="setting-row">
+          <label class="label">启动</label>
+          <div class="manual">
+            <button id="autostart-toggle" class="btn small toggle">开机自动启动：关闭</button>
+            <button id="minimized-toggle" class="btn small toggle">启动时最小化到托盘：关闭</button>
+          </div>
+          <p class="hint">
+            开机自启会写入当前用户的启动项（注册表 Run 键），不弹 UAC。<br />
+            打开「最小化到托盘」后，开机时只在右下角托盘出现图标，不打扰你。
+          </p>
+        </section>
+        <section class="setting-row">
           <label class="label">关于</label>
           <div class="manual">
             <span class="pill on" id="version-pill">版本 —</span>

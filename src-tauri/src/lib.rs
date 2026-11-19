@@ -41,6 +41,8 @@ struct AppState {
     cn_ok: std::sync::atomic::AtomicBool,
     /// 是否使用本地翻译缓存。默认 **true**；关掉后每次都重新请求，方便"翻错了重刷"
     cache_on: std::sync::atomic::AtomicBool,
+    /// 启动时直接最小化到托盘（开机自启时用）
+    start_minimized: std::sync::atomic::AtomicBool,
     /// 选中后是否**自动**弹窗。关掉后划词不再自动弹，但 Ctrl+Alt+. 仍可手动翻译
     auto_popup: std::sync::atomic::AtomicBool,
     /// 本地词典（mmap 打开的 35 MB 词典文件；没配或打不开时为 None）
@@ -1056,6 +1058,103 @@ fn set_translate_enabled(
         let _ = store.save();
     }
     Ok(value)
+}
+
+/// 开机自启用的注册表值名
+const AUTOSTART_NAME: &str = "划词翻译";
+
+fn exe_path() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+/// 是否已开启开机自启。
+///
+/// 直接读写 `HKCU\...\CurrentVersion\Run`，不引入 autostart 插件：
+/// 需求只有"开机跑起来并最小化"，一个注册表值就够了。
+#[tauri::command]
+fn get_autostart() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let out = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                AUTOSTART_NAME,
+            ])
+            .output();
+        matches!(out, Ok(o) if o.status.success())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// 开启/关闭开机自启。命令行带 `--minimized`，配合下面的启动逻辑直接进托盘。
+#[tauri::command]
+fn set_autostart(value: bool) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        if value {
+            let exe = exe_path().ok_or("取不到程序路径")?;
+            let data = format!("\"{exe}\" --minimized");
+            let out = std::process::Command::new("reg")
+                .args([
+                    "add",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    AUTOSTART_NAME,
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    &data,
+                    "/f",
+                ])
+                .output()
+                .map_err(|e| format!("写注册表失败: {e}"))?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+            }
+        } else {
+            let _ = std::process::Command::new("reg")
+                .args([
+                    "delete",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    AUTOSTART_NAME,
+                    "/f",
+                ])
+                .output();
+        }
+    }
+    Ok(value)
+}
+
+/// 开机自启时是否直接最小化到托盘
+#[tauri::command]
+fn get_start_minimized(state: tauri::State<'_, AppState>) -> bool {
+    state
+        .start_minimized
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn set_start_minimized(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    value: bool,
+) -> bool {
+    state
+        .start_minimized
+        .store(value, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(store) = app.store(SETTINGS_FILE) {
+        let _ = store.set("start_minimized", serde_json::json!(value));
+        let _ = store.save();
+    }
+    value
 }
 
 /// 百度翻译凭据：保存后立即生效（只写本机设置，不进代码仓库）
@@ -2859,6 +2958,14 @@ pub fn run() {
                     None
                 }
             };
+            // 启动时是否直接进托盘：设置项 或 命令行带了 --minimized（开机自启）
+            let start_minimized = app
+                .store(SETTINGS_FILE)
+                .ok()
+                .and_then(|s| s.get("start_minimized").and_then(|v| v.as_bool()))
+                .unwrap_or(false)
+                || std::env::args().any(|a| a == "--minimized");
+
 
             app.manage(AppState {
                 engine_id: Mutex::new(engine_id),
@@ -2872,9 +2979,11 @@ pub fn run() {
                 translate_enabled: std::sync::atomic::AtomicBool::new(translate_enabled),
                 cn_ok: std::sync::atomic::AtomicBool::new(cn_ok),
                 cache_on: std::sync::atomic::AtomicBool::new(cache_on_setting),
+                start_minimized: std::sync::atomic::AtomicBool::new(start_minimized),
                 auto_popup: std::sync::atomic::AtomicBool::new(auto_popup),
                 dict: Mutex::new(dict),
             });
+
 
             // 载入百度翻译凭据
             if let Ok(store) = app.store(SETTINGS_FILE) {
@@ -3041,6 +3150,25 @@ pub fn run() {
                 .inner_size(POPUP_W, POPUP_H)
                 .build();
 
+            // 开机自启时直接进托盘，不弹主窗口。
+            // 注意：只在这里 hide 是不够的 —— Tauri 在 setup 返回后还会把主窗口
+            // 显示一次（配置里 visible: true），所以再安排一次延迟隐藏兜底。
+            if start_minimized {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    for delay in [250u64, 700, 1400] {
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                        if let Some(w) = h.get_webview_window("main") {
+                            if w.is_visible().unwrap_or(false) {
+                                let _ = w.hide();
+                            }
+                        }
+                    }
+                });
+            }
             // 复位 WebView 缩放：WebView2 会把 Ctrl+滚轮的缩放持久化，
             // 缩放后 460px 的内容会超出窗口，右侧按钮被裁掉。
             if let Some(w) = app.get_webview_window("main") {
@@ -3215,6 +3343,10 @@ pub fn run() {
             set_translate_enabled,
             get_cn_ok,
             get_auto_popup,
+            get_autostart,
+            set_autostart,
+            get_start_minimized,
+            set_start_minimized,
             set_baidu_cred,
             get_baidu_configured,
             get_cache_on,

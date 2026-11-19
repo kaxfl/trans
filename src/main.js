@@ -270,6 +270,7 @@ enabledToggleEl.addEventListener("click", async () => {
     refreshBaidu();
     loadQuickEngine();
     loadDirection();
+    refreshStartup();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -294,6 +295,7 @@ cnToggleEl.addEventListener("click", async () => {
     refreshBaidu();
     loadQuickEngine();
     loadDirection();
+    refreshStartup();
     refreshHotkeyStatus();
   } catch (e) {}
 });
@@ -540,6 +542,7 @@ refreshSwitches();
     refreshBaidu();
     loadQuickEngine();
     loadDirection();
+    refreshStartup();
 refreshHotkeyStatus();
 
 // ---- 关于：版本号 + 检查更新 ----
@@ -696,3 +699,45 @@ async function loadDirection() {
     syncDirection(v || "auto");
   } catch (e) {}
 }
+
+// ---- 启动：开机自启 + 最小化到托盘 ----
+async function refreshStartup() {
+  const a = document.querySelector("#autostart-toggle");
+  const m = document.querySelector("#minimized-toggle");
+  try {
+    if (a) {
+      const on = await invoke("get_autostart");
+      a.classList.toggle("on", on);
+      a.textContent = "开机自动启动：" + (on ? "开启" : "关闭");
+    }
+  } catch (e) {}
+  try {
+    if (m) {
+      const on = await invoke("get_start_minimized");
+      m.classList.toggle("on", on);
+      m.textContent = "启动时最小化到托盘：" + (on ? "开启" : "关闭");
+    }
+  } catch (e) {}
+}
+
+document.querySelector("#autostart-toggle")?.addEventListener("click", async (ev) => {
+  const btn = ev.target;
+  const cur = btn.classList.contains("on");
+  try {
+    const next = await invoke("set_autostart", { value: !cur });
+    btn.classList.toggle("on", next);
+    btn.textContent = "开机自动启动：" + (next ? "开启" : "关闭");
+  } catch (e) {
+    statusEl.textContent = "设置开机自启失败：" + e;
+  }
+});
+
+document.querySelector("#minimized-toggle")?.addEventListener("click", async (ev) => {
+  const btn = ev.target;
+  const cur = btn.classList.contains("on");
+  try {
+    const next = await invoke("set_start_minimized", { value: !cur });
+    btn.classList.toggle("on", next);
+    btn.textContent = "启动时最小化到托盘：" + (next ? "开启" : "关闭");
+  } catch (e) {}
+});
