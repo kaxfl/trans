@@ -2365,6 +2365,42 @@ fn engine_label(id: &str, source: &str) -> (String, String) {
     (label.to_string(), String::new())
 }
 
+/// 把主窗口"可靠地"唤到前台。
+///
+/// 为什么不能只 `show()`：窗口被 `hide()` 过、或被最小化过、或被挪到屏幕外时，
+/// 单靠 show + set_focus 经常"看着没反应"。这里依次做：
+///   取消最小化 → 显示 → 检查是否在屏幕内（不在就居中）→ 临时置顶抢焦点 → 还原置顶
+fn reveal_main(app: &tauri::AppHandle) {
+    let Some(w) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = w.unminimize();
+    let _ = w.show();
+
+    // 窗口可能在屏幕外（多显示器拔掉、分辨率变化）→ 居中一次
+    if let (Ok(pos), Some(mon)) = (w.outer_position(), w.current_monitor().ok().flatten()) {
+        let mp = mon.position();
+        let ms = mon.size();
+        let inside = pos.x >= mp.x - 50
+            && pos.y >= mp.y - 50
+            && pos.x < mp.x + ms.width as i32 - 50
+            && pos.y < mp.y + ms.height as i32 - 50;
+        if !inside {
+            let _ = w.center();
+        }
+    }
+
+    // 抢前台：Windows 对后台进程有前台锁，临时置顶能确保窗口被抬到最前
+    let was_top = w.is_always_on_top().unwrap_or(false);
+    if !was_top {
+        let _ = w.set_always_on_top(true);
+    }
+    let _ = w.set_focus();
+    if !was_top {
+        let _ = w.set_always_on_top(false);
+    }
+}
+
 /// 把某个布尔开关写进设置文件（托盘和设置页共用）。
 fn persist_flag(app: &tauri::AppHandle, key: &str, value: bool) {
     if let Ok(store) = app.store(SETTINGS_FILE) {
@@ -2747,11 +2783,7 @@ pub fn run() {
     tauri::Builder::default()
         // 单实例：再次启动只唤醒已开窗口，避免多实例抢占全局热键
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            reveal_main(app);
         }))
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
@@ -3183,7 +3215,7 @@ pub fn run() {
                 }
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    for delay in [250u64, 700, 1400] {
+                    for delay in [400u64, 1000] {
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                         if let Some(w) = h.get_webview_window("main") {
                             if w.is_visible().unwrap_or(false) {
@@ -3270,13 +3302,7 @@ pub fn run() {
                         .menu(&menu)
                         .show_menu_on_left_click(false)
                         .on_menu_event(move |app, event| match event.id().as_ref() {
-                            "show" => {
-                                if let Some(w) = app.get_webview_window("main") {
-                                    let _ = w.show();
-                                    let _ = w.unminimize();
-                                    let _ = w.set_focus();
-                                }
-                            }
+                            "show" => reveal_main(app),
                             "t_en" => {
                                 let st = app.state::<AppState>();
                                 let new = !st
@@ -3306,20 +3332,20 @@ pub fn run() {
                             "quit" => app.exit(0),
                             _ => {}
                         })
-                        .on_tray_icon_event(|tray, event| {
-                            if let TrayIconEvent::Click {
+                        .on_tray_icon_event(|tray, event| match event {
+                            // 左键单击 / 双击 都唤出主窗口
+                            TrayIconEvent::Click {
                                 button: MouseButton::Left,
                                 button_state: MouseButtonState::Up,
                                 ..
-                            } = event
-                            {
-                                let app = tray.app_handle();
-                                if let Some(w) = app.get_webview_window("main") {
-                                    let _ = w.show();
-                                    let _ = w.unminimize();
-                                    let _ = w.set_focus();
-                                }
                             }
+                            | TrayIconEvent::DoubleClick {
+                                button: MouseButton::Left,
+                                ..
+                            } => {
+                                reveal_main(tray.app_handle());
+                            }
+                            _ => {}
                         })
                         .build(app);
                 }
