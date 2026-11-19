@@ -110,6 +110,15 @@ fn exact(w: &str) -> Option<&'static str> {
         "encrypt" => "加密",
         "decrypt" => "解密",
         "hash" => "哈希",
+        "scene" => "场景",
+        "item" => "条目",
+        "button" => "按钮",
+        "sound" => "声音",
+        "timer" => "计时器",
+        "view" => "视图",
+        "widget" => "控件",
+        "label" => "标签",
+        "background" => "背景",
         "render" => "渲染",
         "draw" => "绘制",
         "paint" => "绘制",
@@ -150,7 +159,6 @@ fn exact(w: &str) -> Option<&'static str> {
         "root" => "根",
         "key" => "键",
         "entry" => "条目",
-        "item" => "条目",
         "element" | "elem" => "元素",
         "count" => "计数",
         "size" => "大小",
@@ -243,7 +251,6 @@ fn exact(w: &str) -> Option<&'static str> {
         "type" => "类型",
         "kind" => "种类",
         "level" => "级别",
-        "label" => "标签",
         "title" => "标题",
         "text" => "文本",
         "line" => "行",
@@ -287,5 +294,118 @@ mod tests {
         assert_eq!(lookup("flags"), Some("标志"));
         assert_eq!(lookup("boxes"), None); // 表里没有 box："boxes" → "box" 查不到
         assert_eq!(lookup("userProfile"), None);
+    }
+}
+
+/// 各语言共有的关键字 —— 这些**不该翻译**（`for` 翻成"为"只会更看不懂）。
+pub fn is_keyword(w: &str) -> bool {
+    matches!(
+        w,
+        "if" | "else" | "for" | "while" | "do" | "switch" | "case" | "default" | "break"
+            | "continue" | "return" | "goto" | "try" | "catch" | "finally" | "throw" | "new"
+            | "delete" | "this" | "self" | "super" | "class" | "struct" | "enum" | "union"
+            | "interface" | "trait" | "impl" | "fn" | "def" | "func" | "function" | "public"
+            | "private" | "protected" | "static" | "const" | "let" | "var" | "mut" | "auto"
+            | "void" | "int" | "uint" | "long" | "short" | "float" | "double" | "char" | "bool"
+            | "string" | "str" | "byte" | "unsigned" | "signed" | "size_t" | "nullptr" | "null"
+            | "true" | "false" | "and" | "or" | "not" | "in" | "is" | "as" | "use" | "mod"
+            | "pub" | "crate" | "extern" | "inline" | "virtual" | "override" | "final"
+            | "namespace" | "using" | "typedef" | "template" | "typename" | "operator"
+            | "await" | "async" | "yield" | "match" | "when" | "elif" | "lambda" | "pass"
+            | "import" | "export" | "from" | "package" | "include" | "define"
+    )
+}
+
+/// 标识符里的"动词用法"覆盖表。
+///
+/// 同一个词在类型位置和动词位置意思不同：`Set` 作类型是"集合"，
+/// 作前缀（`setPos`）却是"设置"。这里优先按动词理解。
+fn ident_word(part: &str) -> Option<&'static str> {
+    match part.to_ascii_lowercase().as_str() {
+        "set" => Some("设置"),
+        "get" => Some("获取"),
+        "add" => Some("添加"),
+        "del" | "rm" => Some("删除"),
+        "is" => Some("是"),
+        "has" => Some("有"),
+        "to" => Some("转成"),
+        "on" => Some("当"),
+        "max" => Some("最大"),
+        "min" => Some("最小"),
+        _ => lookup(part),
+    }
+}
+
+/// 把一个标识符按 camelCase / snake_case 拆开，逐段查表；全部命中才返回拼接结果。
+///
+/// 例：`setPos` → "设置位置"、`addItem` → "添加条目"、`userProfileCache` → "用户配置档案缓存"。
+/// 只要有一段落空就返回 None（宁可保留原文，也不给半成品）。
+pub fn lookup_identifier(word: &str) -> Option<String> {
+    // 纯大写缩写（URL / API）不动
+    if word.chars().all(|c| c.is_ascii_uppercase()) && word.chars().count() >= 2 {
+        return None;
+    }
+    let mut out = String::new();
+    let mut any = false;
+    for seg in word.split(['_', '-', '.', '/', '\\']) {
+        if seg.is_empty() {
+            continue;
+        }
+        // camelCase 边界
+        let chars: Vec<char> = seg.chars().collect();
+        let mut parts: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for (i, &c) in chars.iter().enumerate() {
+            if c.is_uppercase() && i > 0 && !cur.is_empty() {
+                let prev = chars[i - 1];
+                let next_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
+                if prev.is_lowercase() || next_lower {
+                    parts.push(std::mem::take(&mut cur));
+                }
+            }
+            cur.push(c);
+        }
+        if !cur.is_empty() {
+            parts.push(cur);
+        }
+
+        for part in parts {
+            // 单字母前缀（Q、u8 里的 u）保留
+            if part.chars().count() <= 1 {
+                out.push_str(&part);
+                continue;
+            }
+            if is_keyword(&part.to_ascii_lowercase()) {
+                out.push_str(&part);
+                any = true;
+                continue;
+            }
+            match ident_word(&part) {
+                Some(m) => {
+                    out.push_str(m);
+                    any = true;
+                }
+                None => return None,
+            }
+        }
+    }
+    if any {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod ident_tests {
+    use super::lookup_identifier;
+
+    #[test]
+    fn splits_camel_case() {
+        assert_eq!(lookup_identifier("setPos").as_deref(), Some("设置位置"));
+        assert_eq!(lookup_identifier("addItem").as_deref(), Some("添加条目"));
+        assert_eq!(lookup_identifier("userProfileCache").as_deref(), Some("用户配置档案缓存"));
+        // 有查不到的段落 → 整体放弃，保留原文
+        assert_eq!(lookup_identifier("qqqqZzzz"), None);
     }
 }

@@ -472,6 +472,54 @@ fn pick_meaning(translation: &str) -> Option<String> {
     }
     None
 }
+/// 粗略判断"这是不是一段代码"。
+///
+/// 为什么需要：模型看到 `shop->setPos(520, 45);` 这类行会当句子硬翻，
+/// 实测把 `Shop` 翻成"刘草的人"、`map` 翻成"场"——比不翻还糟。
+/// 判到代码就直接走标识符级翻译，压根不给模型发挥的机会。
+fn looks_like_code(text: &str) -> bool {
+    if text.chars().count() > 4000 {
+        return false;
+    }
+    let lines = text.lines().count().max(1) as f64;
+    let syms = text
+        .chars()
+        .filter(|c| matches!(c, '{' | '}' | '(' | ')' | '[' | ']' | ';' | '=' | '<' | '>' | '*' | '&' | '|'))
+        .count() as f64;
+    let arrows = text.matches("->").count()
+        + text.matches("::").count()
+        + text.matches("&&").count()
+        + text.matches("==").count()
+        + text.matches("++").count();
+    arrows >= 1 || (syms / lines) >= 3.0
+}
+
+/// 代码优先：识别成代码就走逐词/标识符翻译，否则交给正常翻译链。
+async fn translate_or_code(
+    app: &tauri::AppHandle,
+    text: &str,
+    target: &str,
+    id: &str,
+    cfg: &engine::LocalConfig,
+) -> Result<engine::Translation, String> {
+    if looks_like_code(text) {
+        let state = app.state::<AppState>();
+        if let Some(fixed) = wordwise_preserve(&state, text) {
+            eprintln!("[翻译] 判定为代码，走标识符级翻译");
+            return Ok(engine::Translation {
+                translated: fixed,
+                source: "glossary".into(),
+                target: target.to_string(),
+                cached: false,
+                hit_count: 0,
+                parts: Vec::new(),
+                senses: Vec::new(),
+            });
+        }
+    }
+    translate_with_fallback(text, target, id, cfg, None).await
+}
+
 /// 整句翻不出来时的兜底：**逐词查本地词典，并原样保留所有符号/缩进/换行**。
 ///
 /// 为什么这样设计：
@@ -504,10 +552,19 @@ fn wordwise_preserve(state: &AppState, text: &str) -> Option<String> {
         }
         // 词典优先（释义更完整），查不到再看代码术语表（ctx / buf 这类），
         // 最后都没有就保留原文——不编造。
-        let hit = d
-            .lookup(w)
-            .and_then(|e| pick_meaning(&e.translation))
-            .or_else(|| glossary::lookup(w).map(|m| m.to_string()));
+        // 关键字（for / int / return）保持原样：翻成"为""整数"只会更难读。
+        // 术语表优先：它是按"编程语境"人工挑的，比通用词典的第一条更贴切
+        // （scene 在词典里第一条是"场"，代码里该是"场景"）。
+        // 兜底顺序：术语表 → 词典 → 标识符拆词。
+        let lower = w.to_ascii_lowercase();
+        let hit = if glossary::is_keyword(&lower) {
+            None
+        } else {
+            glossary::lookup(w)
+                .map(|m| m.to_string())
+                .or_else(|| d.lookup(w).and_then(|e| pick_meaning(&e.translation)))
+                .or_else(|| glossary::lookup_identifier(w))
+        };
         match hit {
             Some(meaning) => {
                 out.push_str(&meaning);
@@ -1999,7 +2056,7 @@ async fn show_translation_popup(
     }
 
     // ③ 走引擎
-    let mut res = translate_with_fallback(text, target, &id, &cfg, None).await;
+    let mut res = translate_or_code(app, text, target, &id, &cfg).await;
     // 整句翻不动（或结果不可信）→ 逐词兜底，保留原格式。
     // 代码块、配置、日志这类"符号多、换行多"的文本主要靠这条兜住。
     let bad = match &res {
@@ -2012,7 +2069,7 @@ async fn show_translation_popup(
             eprintln!("[翻译] 整句失败，改用逐词兜底");
             res = Ok(engine::Translation {
                 translated: fixed,
-                source: "code".into(),
+                source: "glossary".into(),
                 target: target.to_string(),
                 cached: false,
                 hit_count: 0,
@@ -2215,7 +2272,7 @@ pub(crate) async fn translate_and_emit(app: &tauri::AppHandle, text: &str) {
 
     // ③ 翻一次
     let mut final_text = text.to_string();
-    let mut result = translate_with_fallback(text, target, &id, &cfg, None).await;
+    let mut result = translate_or_code(app, text, target, &id, &cfg).await;
 
     // ③ 结果不可信、且刚才是走 UIA 抓的 → 换剪贴板再抓一次重翻（只重试一次）
     let unusable = match &result {
@@ -2249,7 +2306,7 @@ pub(crate) async fn translate_and_emit(app: &tauri::AppHandle, text: &str) {
             eprintln!("[翻译] 整句失败，改用逐词兜底（选区路径）");
             result = Ok(engine::Translation {
                 translated: fixed,
-                source: "code".into(),
+                source: "glossary".into(),
                 target: target.to_string(),
                 cached: false,
                 hit_count: 0,
