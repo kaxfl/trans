@@ -1119,12 +1119,24 @@ fn get_autostart() -> bool {
 
 /// 开启/关闭开机自启。命令行带 `--minimized`，配合下面的启动逻辑直接进托盘。
 #[tauri::command]
-fn set_autostart(value: bool) -> Result<bool, String> {
+fn set_autostart(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    value: bool,
+) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
         if value {
             let exe = exe_path().ok_or("取不到程序路径")?;
-            let data = format!("\"{exe}\" --minimized");
+            // 带不带 --minimized 取决于"启动时最小化"开关
+            let minimize = state
+                .start_minimized
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let data = if minimize {
+                format!("\"{exe}\" --minimized")
+            } else {
+                format!("\"{exe}\"")
+            };
             let out = std::process::Command::new("reg")
                 .args([
                     "add",
@@ -1178,6 +1190,44 @@ fn set_start_minimized(
         let _ = store.set("start_minimized", serde_json::json!(value));
         let _ = store.save();
     }
+    // 自启开着的话，同步改写 Run 键（决定带不带 --minimized）
+    #[cfg(target_os = "windows")]
+    {
+        let autostart_on = {
+            let out = std::process::Command::new("reg")
+                .args([
+                    "query",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    AUTOSTART_NAME,
+                ])
+                .output();
+            matches!(out, Ok(o) if o.status.success())
+        };
+        if autostart_on {
+            if let Some(exe) = exe_path() {
+                let data = if value {
+                    format!("\"{exe}\" --minimized")
+                } else {
+                    format!("\"{exe}\"")
+                };
+                let _ = std::process::Command::new("reg")
+                    .args([
+                        "add",
+                        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                        "/v",
+                        AUTOSTART_NAME,
+                        "/t",
+                        "REG_SZ",
+                        "/d",
+                        &data,
+                        "/f",
+                    ])
+                    .output();
+            }
+        }
+    }
+    let _ = &app;
     value
 }
 
@@ -3056,12 +3106,10 @@ pub fn run() {
                 }
             };
             // 启动时是否直接进托盘：设置项 或 命令行带了 --minimized（开机自启）
-            let start_minimized = app
-                .store(SETTINGS_FILE)
-                .ok()
-                .and_then(|s| s.get("start_minimized").and_then(|v| v.as_bool()))
-                .unwrap_or(false)
-                || std::env::args().any(|a| a == "--minimized");
+            // 只有开机自启（注册表带 --minimized）才最小化。
+            // 手动双击打开时应当正常显示窗口 —— 只看命令行参数，
+            // 不要把设置项当成"每次启动都最小化"。
+            let start_minimized = std::env::args().any(|a| a == "--minimized");
 
 
             app.manage(AppState {
@@ -3270,6 +3318,20 @@ pub fn run() {
                     }
                 });
             }
+            // 拦截主窗口的关闭按钮：点 X 只最小化，不销毁窗口。
+            //
+            // 之前没有这段，点 X 会真的关掉 webview 窗口，而进程和托盘还活着——
+            // 此时 get_webview_window("main") 返回 None，托盘/任务栏都唤不回来。
+            if let Some(main) = app.get_webview_window("main") {
+                let w = main.clone();
+                main.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.minimize();
+                    }
+                });
+            }
+
             // 复位 WebView 缩放：WebView2 会把 Ctrl+滚轮的缩放持久化，
             // 缩放后 460px 的内容会超出窗口，右侧按钮被裁掉。
             if let Some(w) = app.get_webview_window("main") {
