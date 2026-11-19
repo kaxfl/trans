@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "1.7.0"
+version = "1.7.1"
 description = "即时翻译 — 划词翻译 / 本地词典 / 代码标识符拆词"
 authors = ["you"]
 edition = "2021"

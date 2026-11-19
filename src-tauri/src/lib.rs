@@ -2236,6 +2236,7 @@ fn engine_label(id: &str, source: &str) -> (String, String) {
         "deepseek" => "DeepSeek 云端",
         "mymemory" => "MyMemory 免费接口",
         "google" => "Google 免费接口",
+        "baidu" => "百度翻译",         "dict" => "本地词典（离线）",
         _ => "未知引擎",
     };
     (label.to_string(), String::new())
