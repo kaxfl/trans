@@ -489,36 +489,60 @@ fn looks_like_code(text: &str) -> bool {
         return false;
     }
 
-    // ① 强信号：这些组合在英文散文里基本不会出现
-    const TOKENS: [&str; 14] = [
-        "->", "::", "=>", "==", "!=", "++", "--", "&&", "||", "{", "}", "();", ");", "#include",
+    // ① 强信号：这些组合几乎只出现在代码里。
+    //    注意**不含** `{` `}` 和 `--`：散文里会有 `{这段不影响你}`，
+    //    命令行参数也有 `gradlew --refresh-dependencies`，都曾被误判。
+    const STRONG: [&str; 12] = [
+        "->", "::", "=>", "==", "!=", "&&", "||", "();", "#include", "fn ", "def ", "pub fn",
     ];
-    if TOKENS.iter().any(|s| t.contains(s)) {
+    if STRONG.iter().any(|s| t.contains(s)) {
         return true;
     }
 
-    // ② 分号 / 等号密度：HOI4 脚本每行形如 `key = value`，
-    //    正常英文段落里 `=` 和 `;` 极少。
     let semi = t.matches(';').count();
     let eq = t.matches('=').count();
     let lines = t.lines().count().max(1) as f64;
-    if semi >= 1 {
-        return true;
-    }
-    if eq >= 2 && (eq as f64 / lines) >= 0.8 {
+
+    // ② 两个以上分号 → 代码（散文极少连续用分号）
+    if semi >= 2 {
         return true;
     }
 
-    // ③ 符号占比：散文里标点占比通常 <5%，代码里 `(){}[]=<>*&|` 往往 >12%
+    // ③ 分号 + 花括号同时出现才当代码
+    if semi >= 1 && t.contains('{') && t.contains('}') {
+        return true;
+    }
+
+    // ④ 配置/脚本：`key = value` 形式（HOI4、ini 这类）。
+    //    单行也算：`has_completed_focus = JAP_xxx` 左边是纯标识符。
+    if eq >= 2 && (eq as f64 / lines) >= 0.8 {
+        return true;
+    }
+    if eq >= 1 {
+        for line in t.lines() {
+            if let Some((left, right)) = line.split_once('=') {
+                let l = left.trim();
+                let ident_like = !l.is_empty()
+                    && !l.contains(' ')
+                    && l.chars().any(|c| c.is_alphabetic())
+                    && l.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
+                if ident_like && !right.trim().is_empty() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // ⑤ 兜底：异常符号占比极高（正常英文 < 5%）
     let weird = t
         .chars()
         .filter(|c| {
             !c.is_alphanumeric()
                 && !c.is_whitespace()
-                && !",.'\"!?-:…—·、。，；：！？“”‘’（）《》".contains(*c)
+                && !",.'\"!?-:…—·、。，；：！？“”‘’（）《》`{}[]".contains(*c)
         })
         .count();
-    (weird as f64 / n as f64) > 0.12
+    (weird as f64 / n as f64) > 0.18
 }
 
 /// 代码优先：识别成代码就走逐词/标识符翻译，否则交给正常翻译链。
@@ -3426,6 +3450,15 @@ and show remarkable continuities. The ancient Greeks distinguished between 'meta
         let prose2 = "This distinction was adopted by English poet and translator John Dryden (1631-1700), \
 who described translation as the judicious blending of these two modes.";
         assert!(!looks_like_code(prose2), "第二段也被误判");
+    }
+
+    #[test]
+    fn prose_with_braces_and_flags_is_not_code() {
+        // 截图里被误判的真实文本：有花括号注释、有 --flag
+        let t = "If at any point you are missing libraries in your IDE, or you've run into problems \
+you can run `gradlew --refresh-dependencies` to refresh the local cache. `gradlew clean` to reset \
+everything {this does not affect your code} and then start the process again.";
+        assert!(!looks_like_code(t), "带花括号注释和 --flag 的英文段落被误判成代码");
     }
 
     #[test]
