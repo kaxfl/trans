@@ -715,7 +715,7 @@ async function refreshStartup() {
     if (m) {
       const on = await invoke("get_start_minimized");
       m.classList.toggle("on", on);
-      m.textContent = "启动时最小化到托盘：" + (on ? "开启" : "关闭");
+      m.textContent = "启动时最小化窗口：" + (on ? "开启" : "关闭");
     }
   } catch (e) {}
 }
@@ -738,6 +738,6 @@ document.querySelector("#minimized-toggle")?.addEventListener("click", async (ev
   try {
     const next = await invoke("set_start_minimized", { value: !cur });
     btn.classList.toggle("on", next);
-    btn.textContent = "启动时最小化到托盘：" + (next ? "开启" : "关闭");
+    btn.textContent = "启动时最小化窗口：" + (next ? "开启" : "关闭");
   } catch (e) {}
 });

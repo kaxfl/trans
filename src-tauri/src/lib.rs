@@ -2374,6 +2374,8 @@ fn reveal_main(app: &tauri::AppHandle) {
     let Some(w) = app.get_webview_window("main") else {
         return;
     };
+    // 隐藏时被移出了任务栏，唤出时要加回来，否则 Alt+Tab / 任务栏都找不到它
+    let _ = w.set_skip_taskbar(false);
     let _ = w.unminimize();
     let _ = w.show();
 
@@ -3211,15 +3213,19 @@ pub fn run() {
             // 显示一次（配置里 visible: true），所以再安排一次延迟隐藏兜底。
             if start_minimized {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
+                    // 用「最小化」而不是「隐藏」：
+                    // hide() 会在任务栏留下一个点了没反应的幽灵按钮，
+                    // 而 set_skip_taskbar 在本机实测无法移除它。
+                    // 最小化之后，任务栏点击和托盘点击都能把窗口唤回来。
+                    let _ = w.minimize();
                 }
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     for delay in [400u64, 1000] {
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                         if let Some(w) = h.get_webview_window("main") {
-                            if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
+                            if !w.is_minimized().unwrap_or(false) {
+                                let _ = w.minimize();
                             }
                         }
                     }
