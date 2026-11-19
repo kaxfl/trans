@@ -2424,7 +2424,6 @@ fn reveal_main(app: &tauri::AppHandle) {
     let Some(w) = app.get_webview_window("main") else {
         return;
     };
-    // 隐藏时被移出了任务栏，唤出时要加回来，否则 Alt+Tab / 任务栏都找不到它
     let _ = w.set_skip_taskbar(false);
     let _ = w.unminimize();
     let _ = w.show();
@@ -3304,15 +3303,16 @@ pub fn run() {
                     // hide() 会在任务栏留下一个点了没反应的幽灵按钮，
                     // 而 set_skip_taskbar 在本机实测无法移除它。
                     // 最小化之后，任务栏点击和托盘点击都能把窗口唤回来。
-                    let _ = w.minimize();
+                    let _ = w.hide();
+                    let _ = w.set_skip_taskbar(true);
                 }
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     for delay in [400u64, 1000] {
                         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
                         if let Some(w) = h.get_webview_window("main") {
-                            if !w.is_minimized().unwrap_or(false) {
-                                let _ = w.minimize();
+                            if w.is_visible().unwrap_or(false) {
+                                let _ = w.hide();
                             }
                         }
                     }
@@ -3326,8 +3326,11 @@ pub fn run() {
                 let w = main.clone();
                 main.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        // 真正的托盘应用行为：点 X 直接隐藏窗口（不占任务栏、不占屏幕），
+                        // 进程与托盘继续常驻，点托盘图标即可恢复。
                         api.prevent_close();
-                        let _ = w.minimize();
+                        let _ = w.hide();
+                        let _ = w.set_skip_taskbar(true);
                     }
                 });
             }
